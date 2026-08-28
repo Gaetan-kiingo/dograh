@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.46.0 (2026-08-28)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+## What's Changed
+### Features
+* feat: better UX for setting up telephony by @a6kme in https://github.com/dograh-hq/dograh/pull/678
+* feat: add Google Tag Manager by @sandeepvemu-dograh in https://github.com/dograh-hq/dograh/pull/673
+* feat: click to copy telephony phone ID by @chewwbaka in https://github.com/dograh-hq/dograh/pull/702
+### Bug Fixes
+* fix: transfer disposition and vicidial lead sync by @a6kme in https://github.com/dograh-hq/dograh/pull/676
+* fix: serve disposition filter codes from the backend by @a6kme in https://github.com/dograh-hq/dograh/pull/677
+* fix: generate a unique Stasis app name per ARI configuration by @a6kme in https://github.com/dograh-hq/dograh/pull/679
+* fix(ui): don't label a secret-only integration node "Not configured" by @ImrKhn03 in https://github.com/dograh-hq/dograh/pull/646
+* fix: keep Langfuse traces private by default by @anupPradhan0 in https://github.com/dograh-hq/dograh/pull/674
+### Other Changes
+* Update README with badges for Product Hunt and Trendshift by @sandeepvemu-dograh in https://github.com/dograh-hq/dograh/pull/659
+* Update README with new Product Hunt badges - Product of the week by @sandeepvemu-dograh in https://github.com/dograh-hq/dograh/pull/672
+* added meta pixel by @pk-198 in https://github.com/dograh-hq/dograh/pull/696
+* Tuner simulation by @mohamedsalem-bot in https://github.com/dograh-hq/dograh/pull/698
+
+## New Contributors
+* @sandeepvemu-dograh made their first contribution in https://github.com/dograh-hq/dograh/pull/659
+* @ImrKhn03 made their first contribution in https://github.com/dograh-hq/dograh/pull/646
+
+**Full Changelog**: https://github.com/dograh-hq/dograh/compare/dograh-v1.45.0...dograh-v1.46.0
+
 ## 1.45.0 (2026-08-11)
 
 <!-- Release notes generated using configuration in .github/release.yml at main -->
