@@ -1,3 +1,4 @@
+import os
 from functools import wraps
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlparse, urlunparse
@@ -506,12 +507,24 @@ def create_stt_service(
             pipecat_language = PipecatLanguage(language_code)
         except ValueError:
             pipecat_language = language_code
-        return AzureSTTService(
+        azure_stt = AzureSTTService(
             api_key=user_config.stt.api_key,
             region=region,
             settings=AzureSTTSettings(language=pipecat_language),
             sample_rate=audio_config.transport_in_sample_rate,
         )
+        # P-06 (latency tuning): optionally shorten Azure's end-of-utterance
+        # segmentation silence so final transcripts arrive sooner. Unset means
+        # Azure's default (~500ms) and stock behavior.
+        seg_ms = os.getenv("AZURE_STT_SEGMENTATION_SILENCE_MS")
+        if seg_ms:
+            import azure.cognitiveservices.speech as speechsdk
+
+            azure_stt._speech_config.set_property(
+                speechsdk.PropertyId.Speech_SegmentationSilenceTimeoutMs, seg_ms
+            )
+            logger.info(f"Azure STT segmentation silence timeout set to {seg_ms}ms")
+        return azure_stt
     elif user_config.stt.provider == ServiceProviders.SMALLEST.value:
         language_code = getattr(user_config.stt, "language", None) or "en"
         try:
