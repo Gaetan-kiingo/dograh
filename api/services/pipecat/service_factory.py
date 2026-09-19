@@ -775,8 +775,8 @@ def create_tts_service(
         voice = (getattr(user_config.tts, "voice", "") or "").strip()
         if not voice:
             raise ValueError(
-                "Mistral TTS needs a voice id: Voxtral has no preset voices. Create one "
-                "with audio.voices.create and set it as the TTS voice."
+                "Mistral TTS needs a voice id. Use a preset Mistral voice (list them with "
+                "audio.voices.list or in AI Studio) or one cloned with audio.voices.create."
             )
         language_code = getattr(user_config.tts, "language", None) or "fr"
         try:

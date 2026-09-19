@@ -1263,8 +1263,8 @@ class MistralTTSConfiguration(BaseTTSConfiguration):
     voice: str = Field(
         default="",
         description=(
-            "Mistral voice id. Voxtral has no preset voices: create one from a short "
-            "audio sample (audio.voices.create) and use its id."
+            "Mistral voice id: a preset Mistral voice (audio.voices.list / AI Studio) "
+            "or one cloned from a short audio sample (audio.voices.create)."
         ),
     )
     language: str = Field(
