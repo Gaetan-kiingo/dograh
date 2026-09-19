@@ -98,6 +98,7 @@ class ServiceProviders(str, Enum):
     SMALLEST = "smallest"
     XAI = "xai"
     LMNT = "lmnt"
+    MISTRAL = "mistral"
 
 
 class BaseServiceConfiguration(BaseModel):
@@ -131,6 +132,7 @@ class BaseServiceConfiguration(BaseModel):
         ServiceProviders.SMALLEST,
         ServiceProviders.XAI,
         ServiceProviders.LMNT,
+        ServiceProviders.MISTRAL,
     ]
     api_key: str | list[str]
 
@@ -326,6 +328,7 @@ INWORLD_PROVIDER_MODEL_CONFIG = provider_model_config(
 SARVAM_PROVIDER_MODEL_CONFIG = provider_model_config("Sarvam")
 CAMB_PROVIDER_MODEL_CONFIG = provider_model_config("Camb.ai")
 RIME_PROVIDER_MODEL_CONFIG = provider_model_config("Rime")
+MISTRAL_PROVIDER_MODEL_CONFIG = provider_model_config("Mistral")
 GOOGLE_CLOUD_PROVIDER_MODEL_CONFIG = provider_model_config("Google Cloud")
 SPEECHMATICS_PROVIDER_MODEL_CONFIG = provider_model_config("Speechmatics")
 ASSEMBLYAI_PROVIDER_MODEL_CONFIG = provider_model_config("AssemblyAI")
@@ -1241,6 +1244,36 @@ class RimeTTSConfiguration(BaseTTSConfiguration):
     )
 
 
+MISTRAL_TTS_MODELS = ["voxtral-mini-tts-2603"]
+# Voxtral TTS languages (mistral.ai/news/voxtral-tts, 2026-03).
+MISTRAL_TTS_LANGUAGES = ["en", "fr", "de", "it", "es", "pt", "nl", "hi", "ar"]
+
+
+@register_tts
+class MistralTTSConfiguration(BaseTTSConfiguration):
+    """Mistral Voxtral TTS (Swiss Voice patch P-09). EU-hosted, EU-controlled."""
+
+    model_config = MISTRAL_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.MISTRAL] = ServiceProviders.MISTRAL
+    model: str = Field(
+        default="voxtral-mini-tts-2603",
+        description="Mistral TTS model.",
+        json_schema_extra={"examples": MISTRAL_TTS_MODELS, "allow_custom_input": True},
+    )
+    voice: str = Field(
+        default="",
+        description=(
+            "Mistral voice id. Voxtral has no preset voices: create one from a short "
+            "audio sample (audio.voices.create) and use its id."
+        ),
+    )
+    language: str = Field(
+        default="fr",
+        description="ISO 639-1 language code.",
+        json_schema_extra={"examples": MISTRAL_TTS_LANGUAGES, "allow_custom_input": True},
+    )
+
+
 SPEACHES_TTS_MODELS = ["hexgrad/Kokoro-82M"]
 
 
@@ -1477,6 +1510,7 @@ TTSConfig = Annotated[
         SmallestAITTSConfiguration,
         XAITTSConfiguration,
         LmntTTSConfiguration,
+        MistralTTSConfiguration,
     ],
     Field(discriminator="provider"),
 ]
@@ -1878,6 +1912,30 @@ class SmallestAISTTConfiguration(BaseSTTConfiguration):
     )
 
 
+MISTRAL_STT_MODELS = ["voxtral-mini-transcribe-realtime-2602"]
+
+
+@register_stt
+class MistralSTTConfiguration(BaseSTTConfiguration):
+    """Mistral Voxtral Realtime STT (Swiss Voice patch P-09). EU-hosted."""
+
+    model_config = MISTRAL_PROVIDER_MODEL_CONFIG
+    provider: Literal[ServiceProviders.MISTRAL] = ServiceProviders.MISTRAL
+    model: str = Field(
+        default="voxtral-mini-transcribe-realtime-2602",
+        description="Mistral realtime STT model.",
+        json_schema_extra={"examples": MISTRAL_STT_MODELS, "allow_custom_input": True},
+    )
+    language: str = Field(
+        default="fr",
+        description="ISO 639-1 language hint, or 'auto' for automatic detection.",
+        json_schema_extra={"examples": ["auto", *MISTRAL_TTS_LANGUAGES], "allow_custom_input": True},
+    )
+    base_url: str | None = Field(
+        default=None, description="Optional custom Mistral API endpoint."
+    )
+
+
 STTConfig = Annotated[
     Union[
         DeepgramSTTConfiguration,
@@ -1894,6 +1952,7 @@ STTConfig = Annotated[
         AzureSpeechSTTConfiguration,
         SmallestAISTTConfiguration,
         ElevenlabsSTTConfiguration,
+        MistralSTTConfiguration,
     ],
     Field(discriminator="provider"),
 ]

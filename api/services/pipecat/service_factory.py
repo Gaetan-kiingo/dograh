@@ -457,6 +457,30 @@ def create_stt_service(
             settings=AssemblyAISTTSettings(**settings_kwargs),
             sample_rate=audio_config.transport_in_sample_rate,
         )
+    elif user_config.stt.provider == ServiceProviders.MISTRAL.value:
+        # P-09 (Swiss Voice): Voxtral Realtime STT, lazy import as for the TTS.
+        from pipecat.services.mistral.stt import MistralSTTService, MistralSTTSettings
+
+        language_code = getattr(user_config.stt, "language", None) or "fr"
+        mistral_stt_language = None  # None = automatic detection
+        if language_code != "auto":
+            try:
+                mistral_stt_language = Language(language_code)
+            except ValueError:
+                mistral_stt_language = None
+        stt_kwargs = {}
+        stt_base_url = getattr(user_config.stt, "base_url", None)
+        if stt_base_url:
+            _validate_runtime_service_url(stt_base_url, "base_url")
+            stt_kwargs["base_url"] = stt_base_url
+        return MistralSTTService(
+            api_key=user_config.stt.api_key,
+            sample_rate=audio_config.transport_in_sample_rate,
+            settings=MistralSTTSettings(
+                model=user_config.stt.model, language=mistral_stt_language
+            ),
+            **stt_kwargs,
+        )
     elif user_config.stt.provider == ServiceProviders.GLADIA.value:
         from pipecat.services.gladia.config import LanguageConfig
 
@@ -738,6 +762,31 @@ def create_tts_service(
                 model=user_config.tts.model,
                 voice=user_config.tts.voice,
                 speed=user_config.tts.speed,
+            ),
+            text_filters=[xml_function_tag_filter],
+            skip_aggregator_types=["recording_router", "recording"],
+            silence_time_s=1.0,
+        )
+    elif user_config.tts.provider == ServiceProviders.MISTRAL.value:
+        # P-09 (Swiss Voice): Voxtral TTS. Imported lazily so a runtime image built
+        # without the `mistral` pipecat extra still boots for every other provider.
+        from pipecat.services.mistral.tts import MistralTTSService, MistralTTSSettings
+
+        voice = (getattr(user_config.tts, "voice", "") or "").strip()
+        if not voice:
+            raise ValueError(
+                "Mistral TTS needs a voice id: Voxtral has no preset voices. Create one "
+                "with audio.voices.create and set it as the TTS voice."
+            )
+        language_code = getattr(user_config.tts, "language", None) or "fr"
+        try:
+            mistral_language = Language(language_code)
+        except ValueError:
+            mistral_language = Language.FR
+        return MistralTTSService(
+            api_key=user_config.tts.api_key,
+            settings=MistralTTSSettings(
+                model=user_config.tts.model, voice=voice, language=mistral_language
             ),
             text_filters=[xml_function_tag_filter],
             skip_aggregator_types=["recording_router", "recording"],
