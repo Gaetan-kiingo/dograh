@@ -6,6 +6,8 @@ post-call processing for runs that execute integrations, QA, or campaign
 reporting.
 """
 
+import os
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from loguru import logger
@@ -49,6 +51,12 @@ async def download_workflow_artifact(
         HTTPException 400: If artifact type is unsupported
         HTTPException 404: If token is invalid or artifact not found
     """
+    # P-11 (Swiss Voice Platform, ADR-002): this route hands Restricted call
+    # content to any holder of a token that never expires. Deployments that
+    # front the runtime with their own authorization switch it off.
+    if os.getenv("PUBLIC_ARTIFACT_DOWNLOADS", "").strip().lower() == "off":
+        raise HTTPException(status_code=404, detail="Not found")
+
     # 1. Lookup workflow run by token
     workflow_run = await db_client.get_workflow_run_by_public_token(token)
     if not workflow_run:
