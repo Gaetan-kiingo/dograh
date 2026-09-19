@@ -945,6 +945,37 @@ def _migrate_deprecated_google_model(model: str) -> str:
     return model
 
 
+# P-08 (Swiss Voice): spoken when the LLM provider stalls, keyed by call language.
+_LLM_STALL_FILLERS = {
+    "fr": "Un instant, s'il vous plaît.",
+    "de": "Einen Moment, bitte.",
+    "it": "Un attimo, per favore.",
+    "en": "One moment, please.",
+}
+
+
+def _llm_stall_guard_kwargs(language: str | None) -> dict:
+    """Timeout + single bounded retry + spoken filler for OpenAI-compatible LLMs.
+
+    Env-gated like the P-06 knobs: LLM_RETRY_TIMEOUT_SECS unset preserves stock
+    behavior (no timeout, no retry). LLM_STALL_FILLER=off disables the phrase.
+    """
+    raw = os.getenv("LLM_RETRY_TIMEOUT_SECS")
+    if not raw:
+        return {}
+    try:
+        timeout = float(raw)
+    except ValueError:
+        logger.warning(f"Ignoring invalid LLM_RETRY_TIMEOUT_SECS={raw!r}")
+        return {}
+    guard: dict = {"retry_on_timeout": True, "retry_timeout_secs": timeout}
+    if os.getenv("LLM_STALL_FILLER", "on").lower() != "off":
+        code = (language or "").split("-")[0].lower()
+        guard["retry_filler_text"] = _LLM_STALL_FILLERS.get(code, _LLM_STALL_FILLERS["en"])
+    logger.info(f"LLM stall guard on: timeout={timeout}s filler={'retry_filler_text' in guard}")
+    return guard
+
+
 @_report_service_factory_failures(ErrorSource.LLM, provider_argument=0)
 def create_llm_service_from_provider(
     provider: str,
@@ -963,6 +994,7 @@ def create_llm_service_from_provider(
     temperature: float | None = None,
     bill_to: str | None = None,
     usage_context: str | None = None,
+    language: str | None = None,
 ):
     """Create an LLM service from explicit provider/model/api_key.
 
@@ -982,6 +1014,7 @@ def create_llm_service_from_provider(
         if base_url:
             _validate_runtime_service_url(base_url, "base_url")
             kwargs["base_url"] = base_url
+        kwargs.update(_llm_stall_guard_kwargs(language))
         if "gpt-5" in model:
             return OpenAILLMService(
                 api_key=api_key,
@@ -1342,6 +1375,7 @@ def create_llm_service(
         api_key,
         correlation_id=correlation_id,
         usage_context=usage_context,
+        language=getattr(getattr(user_config, "stt", None), "language", None),
         **kwargs,
     )
 
