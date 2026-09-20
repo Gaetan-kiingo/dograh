@@ -91,17 +91,25 @@ async def get_effective_ai_model_configuration_for_workflow(
     v2_override = workflow_configurations.get(
         WORKFLOW_MODEL_CONFIGURATION_V2_OVERRIDE_KEY
     )
+    # P-13: this is the execution path (voice pipeline, text chat, QA, quota) -
+    # provider-key references become keys here, in memory only.
+    from api.services.configuration.secret_refs import resolve_configuration
+
     if v2_override:
-        return compile_ai_model_configuration_v2(
-            OrganizationAIModelConfigurationV2.model_validate(v2_override)
+        return resolve_configuration(
+            compile_ai_model_configuration_v2(
+                OrganizationAIModelConfigurationV2.model_validate(v2_override)
+            )
         )
 
     resolved_config = await get_resolved_ai_model_configuration(
         organization_id=organization_id,
     )
-    return resolve_effective_config(
-        resolved_config.effective,
-        workflow_configurations.get("model_overrides"),
+    return resolve_configuration(
+        resolve_effective_config(
+            resolved_config.effective,
+            workflow_configurations.get("model_overrides"),
+        )
     )
 
 

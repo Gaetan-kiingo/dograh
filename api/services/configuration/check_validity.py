@@ -229,6 +229,11 @@ class UserConfigurationValidator:
         service_config: Optional[ServiceConfig] = None,
     ) -> bool:
         """Check if an API key for a provider is valid."""
+        # P-13: validate the key a reference stands for; the stored value stays
+        # the reference. SecretReferenceError is a ValueError -> reported as 422.
+        from api.services.configuration.secret_refs import resolve_value
+
+        api_key = resolve_value(api_key)
         validator = self._validator_map.get(provider)
         if not validator:
             return False
