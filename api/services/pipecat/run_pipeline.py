@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Optional
 
 from fastapi import HTTPException
@@ -618,6 +619,15 @@ async def _run_pipeline_impl(
     include_transcript_end_timestamps = bool(
         transcript_config.get("include_end_timestamps", False)
     )
+    # P-12 (Swiss Voice Platform, ADR-002): recording follows the policy frozen
+    # in the run's definition. Absent key -> RECORDING_DEFAULT ("off" = do not
+    # record); unset keeps stock behavior.
+    recording_enabled = run_configs.get("recording_enabled")
+    if recording_enabled is None:
+        recording_enabled = (
+            os.getenv("RECORDING_DEFAULT", "").strip().lower() != "off"
+        )
+    recording_enabled = bool(recording_enabled)
 
     if run_configs:
         if "max_call_duration" in run_configs:
@@ -1150,6 +1160,7 @@ async def _run_pipeline_impl(
         user_provider_id=user_provider_id,
         integration_runtime_sessions=integration_runtime_sessions,
         include_transcript_end_timestamps=include_transcript_end_timestamps,
+        recording_enabled=recording_enabled,
     )
 
     register_audio_data_handler(audio_buffer, workflow_run_id, in_memory_audio_buffer)

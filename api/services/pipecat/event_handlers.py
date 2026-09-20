@@ -75,6 +75,7 @@ def register_event_handlers(
     user_provider_id: str | None = None,
     integration_runtime_sessions: list[IntegrationRuntimeSession] | None = None,
     include_transcript_end_timestamps: bool = False,
+    recording_enabled: bool = True,
 ):
     """Register all event handlers for transport and task events.
 
@@ -172,7 +173,11 @@ def register_event_handlers(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _participant):
         logger.debug("In on_client_connected callback handler")
-        await audio_buffer.start_recording()
+        # P-12: record only when the run's policy says so.
+        if recording_enabled:
+            await audio_buffer.start_recording()
+        else:
+            logger.info("Recording is off for this run (policy); audio is not captured")
         ready_state["client_connected"] = True
         await maybe_trigger_initial_response()
 
