@@ -5,6 +5,8 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+
+from api.services.campaign.native_switch import require_native_campaigns
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.constants import (
@@ -27,7 +29,8 @@ from api.services.telephony.outbound_readiness import (
     resolve_outbound_configuration_id,
 )
 
-router = APIRouter(prefix="/campaign")
+# P-14: every route of this router is closed when NATIVE_CAMPAIGNS=off.
+router = APIRouter(prefix="/campaign", dependencies=[Depends(require_native_campaigns)])
 
 
 async def _get_org_concurrent_limit(organization_id: int) -> int:

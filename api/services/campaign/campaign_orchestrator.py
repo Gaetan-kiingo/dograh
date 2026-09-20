@@ -657,6 +657,11 @@ class CampaignOrchestrator:
 
 async def main():
     """Main entry point for Campaign Orchestrator service."""
+    from api.services.campaign.native_switch import native_campaigns_enabled
+
+    if not native_campaigns_enabled():  # P-14
+        logger.warning("native campaigns are off (NATIVE_CAMPAIGNS=off); orchestrator not started")
+        return
 
     # Setup Redis connection
     redis = await aioredis.from_url(REDIS_URL, decode_responses=True)

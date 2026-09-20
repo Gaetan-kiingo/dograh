@@ -8,6 +8,7 @@ from api.services.campaign.campaign_call_dispatcher import campaign_call_dispatc
 from api.services.campaign.campaign_event_publisher import (
     get_campaign_event_publisher,
 )
+from api.services.campaign.native_switch import native_campaigns_enabled
 from api.services.campaign.errors import (
     ConcurrentSlotAcquisitionError,
     PhoneNumberPoolExhaustedError,
@@ -29,6 +30,9 @@ async def sync_campaign_source(ctx: Dict, campaign_id: int) -> None:
     - Transitions campaign state to 'running' on success
     - Enqueues process_campaign_batch tasks
     """
+    if not native_campaigns_enabled():  # P-14
+        logger.warning(f"native campaigns are off; job for campaign {campaign_id} ignored")
+        return
     logger.info(f"Starting source sync for campaign {campaign_id}")
 
     try:
@@ -112,6 +116,9 @@ async def process_campaign_batch(
     # and propagate the error to campaign orchestrator which can fail the campaign
     # on some consecutive batch failures.
     """
+    if not native_campaigns_enabled():  # P-14
+        logger.warning(f"native campaigns are off; job for campaign {campaign_id} ignored")
+        return
     logger.info(f"Processing batch for campaign {campaign_id}, batch_size={batch_size}")
 
     failed_count = 0
