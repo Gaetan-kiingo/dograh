@@ -449,10 +449,21 @@ class CustomToolManager:
                         )
                     )
 
+                # P-15 (Swiss Voice Platform, ADR-002): a tool request can say which
+                # call and step it comes from - from the engine's own state, never
+                # from the model - so the receiver can derive an idempotency key.
+                current_node = getattr(self._engine, "_current_node", None)
+                svp_call = {
+                    "run_id": self._engine._workflow_run_id,
+                    "step": getattr(current_node, "id", None) or "",
+                }
                 result = await execute_http_tool(
                     tool=tool,
                     arguments=function_call_params.arguments,
-                    call_context_vars=self._engine._call_context_vars,
+                    call_context_vars={
+                        **(self._engine._call_context_vars or {}),
+                        "svp_call": svp_call,
+                    },
                     gathered_context_vars=self._engine._gathered_context,
                     organization_id=await self.get_organization_id(),
                 )
