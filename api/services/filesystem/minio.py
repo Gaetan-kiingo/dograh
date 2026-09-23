@@ -192,6 +192,25 @@ class MinioFileSystem(BaseFileSystem):
         except S3Error:
             return False
 
+    async def adelete_file(self, file_path: str) -> str:
+        """P-16: delete an object; "absent" when there is nothing under the key."""
+
+        def _delete() -> str:
+            try:
+                self.client.stat_object(self.bucket_name, file_path)
+            except S3Error as e:
+                if e.code in ("NoSuchKey", "NoSuchObject"):
+                    return "absent"
+                raise
+            self.client.remove_object(self.bucket_name, file_path)
+            return "deleted"
+
+        try:
+            return await asyncio.to_thread(_delete)
+        except S3Error as e:
+            logger.warning(f"P-16: delete of {file_path} failed: {e.code}")
+            return "failed"
+
     async def acopy_file(self, source_path: str, destination_path: str) -> bool:
         """Copy a file within MinIO (server-side copy)."""
         try:

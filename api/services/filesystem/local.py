@@ -44,6 +44,17 @@ class LocalFileSystem(BaseFileSystem):
         except Exception:
             return False
 
+    async def adelete_file(self, file_path: str) -> str:
+        """P-16: remove the file; "absent" when it is not there."""
+        full_path = self._get_full_path(file_path)
+        if not os.path.exists(full_path):
+            return "absent"
+        try:
+            await asyncio.to_thread(os.remove, full_path)
+            return "deleted"
+        except OSError:
+            return "failed"
+
     async def aupload_file(self, local_path: str, destination_path: str) -> bool:
         try:
             full_dest_path = self._get_full_path(destination_path)

@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import uuid
 from datetime import datetime
@@ -49,7 +50,7 @@ from api.services.configuration.resolve import (
 from api.services.mps_service_key_client import mps_service_key_client
 from api.services.posthog_client import capture_event
 from api.services.reports import generate_workflow_report_csv
-from api.services.storage import storage_fs
+from api.services.storage import get_storage_for_backend, storage_fs
 from api.services.workflow.configuration_policy import (
     ExternalPBXConfigurationDisabledError,
     WorkflowConfigurationNotFoundError,
@@ -1499,6 +1500,58 @@ async def get_workflow_run(
         "logs": run.logs,
         "annotations": run.annotations,
     }
+
+
+# P-16 (ADR-002, ADR-027): the platform deletes a call's artifacts for good. Stock
+# Dograh can only flag a recording as deleted; its storage layer has no delete. The
+# route exists only when SVP_ARTIFACT_DELETE=on; unset keeps stock behaviour (404).
+_ARTIFACT_SCOPES = ("recording", "transcript")
+
+
+@router.delete("/{workflow_id}/runs/{run_id}/artifacts")
+async def delete_workflow_run_artifacts(
+    workflow_id: int,
+    run_id: int,
+    scopes: str = Query("recording,transcript"),
+    user: UserModel = Depends(get_user),
+) -> dict:
+    if os.getenv("SVP_ARTIFACT_DELETE", "").strip().lower() != "on":
+        raise HTTPException(status_code=404, detail="Not Found")
+    run = await db_client.get_workflow_run(
+        run_id, organization_id=user.selected_organization_id
+    )
+    if not run or run.workflow_id != workflow_id:
+        raise HTTPException(status_code=404, detail="Workflow run not found")
+    wanted = [s for s in scopes.split(",") if s in _ARTIFACT_SCOPES]
+    if not wanted:
+        raise HTTPException(status_code=422, detail="scopes: recording and/or transcript")
+    backend = run.storage_backend or StorageBackend.get_current_backend().value
+    fs = get_storage_for_backend(backend)
+    keys: dict[str, list[str]] = {
+        "recording": [
+            k
+            for k in (
+                run.recording_url,
+                get_recording_storage_key(run.extra, "user"),
+                get_recording_storage_key(run.extra, "bot"),
+            )
+            if k
+        ],
+        "transcript": [run.transcript_url] if run.transcript_url else [],
+    }
+    outcome: dict[str, str] = {}
+    cleared: list[str] = []
+    for scope in wanted:
+        results = [await fs.adelete_file(key) for key in keys[scope]]
+        if any(r == "failed" for r in results):
+            outcome[scope] = "failed"
+            continue
+        outcome[scope] = "deleted" if "deleted" in results else "absent"
+        cleared.append(scope)
+    if cleared:
+        await db_client.clear_run_artifacts(run_id, cleared)
+    logger.info(f"P-16: run {run_id} artifacts {outcome}")
+    return {"run_id": run_id, "outcome": outcome}
 
 
 class WorkflowRunsResponse(BaseModel):

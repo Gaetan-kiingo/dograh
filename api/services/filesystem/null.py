@@ -22,6 +22,9 @@ class NullFileSystem(BaseFileSystem):
     async def aupload_file(self, local_path: str, destination_path: str) -> bool:
         self._fail("aupload_file")
 
+    async def adelete_file(self, file_path: str) -> str:
+        self._fail("adelete_file")
+
     async def aget_signed_url(
         self,
         file_path: str,

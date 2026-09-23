@@ -336,6 +336,33 @@ class WorkflowRunClient(BaseDBClient):
             ]
             return runs, total_count
 
+    async def clear_run_artifacts(self, run_id: int, scopes: List[str]) -> None:
+        """P-16: forget the run's artifacts after their objects are deleted. The
+        recording scope clears every recording reference; the transcript scope clears
+        the transcript reference, the transcript-derived logs and the gathered context
+        (the values the caller gave). The row itself stays: it carries no caller
+        content, only timing, usage and cost."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(WorkflowRunModel)
+                .where(WorkflowRunModel.id == run_id)
+                .with_for_update()
+            )
+            run = result.scalars().first()
+            if not run:
+                raise ValueError(f"Workflow run with ID {run_id} not found")
+            if "recording" in scopes:
+                run.recording_url = None
+                extra = dict(run.extra or {})
+                extra.pop("recordings", None)
+                extra["recording_deleted"] = True
+                run.extra = extra
+            if "transcript" in scopes:
+                run.transcript_url = None
+                run.logs = {}
+                run.gathered_context = {}
+            await session.commit()
+
     async def update_workflow_run(
         self,
         run_id: int,

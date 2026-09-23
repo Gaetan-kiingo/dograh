@@ -46,6 +46,10 @@ class BaseFileSystem(ABC):
         """
         return await self.acreate_file(file_path, _AsyncBytesReader(data))
 
+    async def adelete_file(self, file_path: str) -> str:
+        """P-16: remove an object for good. Answers "deleted", "absent" or "failed"."""
+        raise NotImplementedError("this storage cannot delete")
+
     @abstractmethod
     async def aupload_file(self, local_path: str, destination_path: str) -> bool:
         """Upload a file from local path to destination.

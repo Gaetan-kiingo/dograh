@@ -178,6 +178,21 @@ class S3FileSystem(BaseFileSystem):
         except ClientError:
             return False
 
+    async def adelete_file(self, file_path: str) -> str:
+        """P-16: delete an object; "absent" when there is nothing under the key."""
+        try:
+            async with self.session.client("s3", **self._client_kwargs()) as s3_client:
+                try:
+                    await s3_client.head_object(Bucket=self.bucket_name, Key=file_path)
+                except ClientError as e:
+                    if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                        return "absent"
+                    raise
+                await s3_client.delete_object(Bucket=self.bucket_name, Key=file_path)
+            return "deleted"
+        except ClientError:
+            return "failed"
+
     async def acopy_file(self, source_path: str, destination_path: str) -> bool:
         """Copy a file within S3 (server-side copy)."""
         try:
