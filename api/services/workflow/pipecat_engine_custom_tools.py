@@ -457,15 +457,30 @@ class CustomToolManager:
                     "run_id": self._engine._workflow_run_id,
                     "step": getattr(current_node, "id", None) or "",
                 }
-                result = await execute_http_tool(
-                    tool=tool,
-                    arguments=function_call_params.arguments,
-                    call_context_vars={
-                        **(self._engine._call_context_vars or {}),
-                        "svp_call": svp_call,
-                    },
-                    gathered_context_vars=self._engine._gathered_context,
-                    organization_id=await self.get_organization_id(),
+                # P-18 (ADR-033 point 6, PERF-008): a progress phrase in the call's
+                # language when the tool has not answered after SVP_TOOL_FILLER_AFTER_MS
+                from api.services.workflow.tool_filler import filler_text, with_filler
+
+                async def _speak_filler(text: str) -> None:
+                    logger.info(f"P-18: tool '{function_name}' is slow, speaking the filler")
+                    self._engine._queued_speech_mute_state = "waiting"
+                    await self._engine.task.queue_frame(
+                        TTSSpeakFrame(text, append_to_context=False, persist_to_logs=True)
+                    )
+
+                result = await with_filler(
+                    execute_http_tool(
+                        tool=tool,
+                        arguments=function_call_params.arguments,
+                        call_context_vars={
+                            **(self._engine._call_context_vars or {}),
+                            "svp_call": svp_call,
+                        },
+                        gathered_context_vars=self._engine._gathered_context,
+                        organization_id=await self.get_organization_id(),
+                    ),
+                    _speak_filler,
+                    filler_text(config),
                 )
 
                 await function_call_params.result_callback(result)
