@@ -359,6 +359,8 @@ async def _run_pipeline_telephony_impl(
     user_config = await get_effective_ai_model_configuration_for_workflow(
         organization_id=workflow.organization_id,
         workflow_configurations=run_configs,
+        workflow_id=workflow_id,
+        workflow_run_id=workflow_run_id,
     )
     is_realtime = bool(user_config.is_realtime and user_config.realtime is not None)
 
@@ -489,6 +491,8 @@ async def _run_pipeline_smallwebrtc_impl(
     user_config = await get_effective_ai_model_configuration_for_workflow(
         organization_id=workflow.organization_id if workflow else None,
         workflow_configurations=run_configs,
+        workflow_id=workflow_id,
+        workflow_run_id=workflow_run_id,
     )
     is_realtime = bool(user_config.is_realtime and user_config.realtime is not None)
 
@@ -653,6 +657,8 @@ async def _run_pipeline_impl(
         user_config = await get_effective_ai_model_configuration_for_workflow(
             organization_id=workflow.organization_id,
             workflow_configurations=run_configs,
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
         )
     else:
         user_config = resolved_user_config

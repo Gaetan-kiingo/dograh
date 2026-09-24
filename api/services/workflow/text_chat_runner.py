@@ -463,6 +463,8 @@ async def execute_text_chat_pending_turn(
     user_config = await get_effective_ai_model_configuration_for_workflow(
         organization_id=workflow.organization_id,
         workflow_configurations=run_configs,
+        workflow_id=workflow_id,
+        workflow_run_id=workflow_run.id,
     )
     if user_config.llm is None:
         raise ValueError("Text chat requires an LLM configuration")

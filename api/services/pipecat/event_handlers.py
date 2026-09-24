@@ -366,6 +366,10 @@ def register_event_handlers(
             is_completed=True,
             state=WorkflowRunState.COMPLETED.value,
         )
+        # P-17: the call is over, its provider keys leave memory
+        from api.services.configuration.secret_refs import forget_run
+
+        forget_run(workflow_run_id)
 
         asyncio.create_task(
             _capture_call_event(

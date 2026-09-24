@@ -86,31 +86,40 @@ async def get_effective_ai_model_configuration_for_workflow(
     *,
     organization_id: int | None,
     workflow_configurations: dict | None,
+    workflow_id: int | None = None,
+    workflow_run_id: int | None = None,
 ) -> EffectiveAIModelConfiguration:
     workflow_configurations = workflow_configurations or {}
     v2_override = workflow_configurations.get(
         WORKFLOW_MODEL_CONFIGURATION_V2_OVERRIDE_KEY
     )
-    # P-13: this is the execution path (voice pipeline, text chat, QA, quota) -
-    # provider-key references become keys here, in memory only.
-    from api.services.configuration.secret_refs import resolve_configuration
+    # P-13 / P-17: this is the execution path (voice pipeline, text chat, QA, quota) -
+    # provider-key references become keys here, in memory only: from the platform
+    # once per run when SVP_KEY_SERVICE_URL is set, else from the environment.
+    from api.services.configuration.secret_refs import (
+        keys_for_run,
+        resolve_configuration,
+    )
 
     if v2_override:
-        return resolve_configuration(
-            compile_ai_model_configuration_v2(
-                OrganizationAIModelConfigurationV2.model_validate(v2_override)
-            )
+        effective = compile_ai_model_configuration_v2(
+            OrganizationAIModelConfigurationV2.model_validate(v2_override)
         )
-
-    resolved_config = await get_resolved_ai_model_configuration(
-        organization_id=organization_id,
-    )
-    return resolve_configuration(
-        resolve_effective_config(
+    else:
+        resolved_config = await get_resolved_ai_model_configuration(
+            organization_id=organization_id,
+        )
+        effective = resolve_effective_config(
             resolved_config.effective,
             workflow_configurations.get("model_overrides"),
         )
+    keys = await keys_for_run(
+        effective,
+        organization_id=organization_id,
+        workflow_id=workflow_id,
+        run_id=workflow_run_id,
     )
+    return resolve_configuration(effective, keys)
 
 
 async def get_organization_ai_model_configuration_v2(

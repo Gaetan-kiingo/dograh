@@ -235,6 +235,10 @@ async def complete_text_chat_session(
             logs={"realtime_feedback_events": feedback_events},
             state=WorkflowRunState.COMPLETED.value,
         )
+        # P-17: the text session is over, its provider keys leave memory
+        from api.services.configuration.secret_refs import forget_run
+
+        forget_run(workflow_run_id)
     except WorkflowRunTextSessionRevisionConflictError as e:
         raise TextChatSessionRevisionConflictError(
             expected_revision=e.expected_revision,
@@ -319,6 +323,10 @@ async def execute_pending_text_chat_turn(
                 logs=text_chat_logs,
                 state=execution.state,
             )
+            # P-17: the text session is over, its provider keys leave memory
+            from api.services.configuration.secret_refs import forget_run
+
+            forget_run(workflow_run_id)
         else:
             await db_client.update_workflow_run_text_session(
                 run_id,
