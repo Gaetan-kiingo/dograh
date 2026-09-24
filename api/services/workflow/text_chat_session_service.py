@@ -238,7 +238,7 @@ async def complete_text_chat_session(
         # P-17: the text session is over, its provider keys leave memory
         from api.services.configuration.secret_refs import forget_run
 
-        forget_run(workflow_run_id)
+        forget_run(run_id)
     except WorkflowRunTextSessionRevisionConflictError as e:
         raise TextChatSessionRevisionConflictError(
             expected_revision=e.expected_revision,
@@ -326,7 +326,7 @@ async def execute_pending_text_chat_turn(
             # P-17: the text session is over, its provider keys leave memory
             from api.services.configuration.secret_refs import forget_run
 
-            forget_run(workflow_run_id)
+            forget_run(run_id)
         else:
             await db_client.update_workflow_run_text_session(
                 run_id,
