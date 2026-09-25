@@ -4,6 +4,7 @@ from pipecat.utils.run_context import set_current_run_id
 from api.services.workflow_run_billing import (
     report_completed_workflow_run_platform_usage,
 )
+from api.services.platform_notify import notify_call_ended
 from api.tasks.run_integrations import run_integrations_post_workflow_run
 
 
@@ -31,6 +32,13 @@ async def process_workflow_completion(
         await run_integrations_post_workflow_run(_ctx, workflow_run_id)
     except Exception as e:
         logger.error(f"Error running integrations for workflow {workflow_run_id}: {e}")
+
+    # P-20: the platform told the call ended, once its artifacts and integrations are
+    # done (SVP_CALL_ENDED_URL; unset = nothing is sent). Never raises.
+    try:
+        await notify_call_ended(workflow_run_id)
+    except Exception as e:
+        logger.error(f"Error telling the platform run {workflow_run_id} ended: {e}")
 
     # Notify MPS after completion. MPS owns credit accounting.
     try:
