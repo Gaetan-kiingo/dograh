@@ -98,6 +98,7 @@ from pipecat.services.speechmatics.stt import (
 from pipecat.services.xai.tts import XAITTSService, XAIWebsocketTTSSettings
 from pipecat.transcriptions.language import Language
 from pipecat.utils.text.xml_function_tag_filter import XMLFunctionTagFilter
+from api.services.pipecat.digit_groups_filter import svp_text_filters
 
 if TYPE_CHECKING:
     from api.schemas.ai_model_configuration import EffectiveAIModelConfiguration
@@ -602,11 +603,13 @@ def create_tts_service(
     )
     # Create function call filter to prevent TTS from speaking function call tags
     xml_function_tag_filter = XMLFunctionTagFilter()
+    # P-21 (ADR-002): the platform's filters after it (digit groups said as groups)
+    text_filters = [xml_function_tag_filter, *svp_text_filters()]
     if user_config.tts.provider == ServiceProviders.DEEPGRAM.value:
         return DeepgramTTSService(
             api_key=user_config.tts.api_key,
             settings=DeepgramTTSSettings(voice=user_config.tts.voice),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -620,7 +623,7 @@ def create_tts_service(
             api_key=user_config.tts.api_key,
             sample_rate=OPENAI_SAMPLE_RATE,
             settings=OpenAITTSSettings(model=user_config.tts.model),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
             **kwargs,
@@ -645,7 +648,7 @@ def create_tts_service(
             credentials=credentials,
             location=location,
             settings=GoogleTTSSettings(**settings_kwargs),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -671,7 +674,7 @@ def create_tts_service(
                 speed=user_config.tts.speed,
                 similarity_boost=0.75,
             ),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -699,7 +702,7 @@ def create_tts_service(
                     else {}
                 ),
             ),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -718,7 +721,7 @@ def create_tts_service(
                 speaking_rate=speed,
                 delivery_mode=delivery_mode,
             ),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -734,7 +737,7 @@ def create_tts_service(
                 voice=user_config.tts.voice,
                 speed=user_config.tts.speed,
             ),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -747,7 +750,7 @@ def create_tts_service(
             api_key=user_config.tts.api_key,
             voice_id=voice_id,
             model=user_config.tts.model,
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
         )
         # Set language directly as BCP-47 code (bypasses Language enum conversion)
@@ -763,7 +766,7 @@ def create_tts_service(
                 voice=user_config.tts.voice,
                 speed=user_config.tts.speed,
             ),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -788,7 +791,7 @@ def create_tts_service(
             settings=MistralTTSSettings(
                 model=user_config.tts.model, voice=voice, language=mistral_language
             ),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -813,7 +816,7 @@ def create_tts_service(
         return RimeTTSService(
             api_key=user_config.tts.api_key,
             settings=RimeTTSSettings(**settings_kwargs),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -849,7 +852,7 @@ def create_tts_service(
         return SarvamTTSService(
             api_key=user_config.tts.api_key,
             settings=SarvamTTSSettings(**settings_kwargs),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -884,7 +887,7 @@ def create_tts_service(
                 voice=voice,
                 speed=speed,
             ),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -905,7 +908,7 @@ def create_tts_service(
             api_key=user_config.tts.api_key,
             region=region,
             settings=AzureTTSSettings(**settings_kwargs),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -927,7 +930,7 @@ def create_tts_service(
         return SmallestTTSService(
             api_key=user_config.tts.api_key,
             settings=settings_kwargs,
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -947,7 +950,7 @@ def create_tts_service(
                 voice=voice,
                 language=pipecat_language,
             ),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
@@ -971,7 +974,7 @@ def create_tts_service(
                 language=pipecat_language,
                 model=model,
             ),
-            text_filters=[xml_function_tag_filter],
+            text_filters=text_filters,
             skip_aggregator_types=["recording_router", "recording"],
             silence_time_s=1.0,
         )
