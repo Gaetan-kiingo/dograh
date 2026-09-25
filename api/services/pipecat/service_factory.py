@@ -1003,6 +1003,26 @@ _LLM_STALL_FILLERS = {
 }
 
 
+STOCK_LLM_TEMPERATURE = 0.1
+
+
+def _llm_temperature() -> float:
+    """P-19 (ADR-002): the sampling temperature of the call's LLM, from
+    SVP_LLM_TEMPERATURE. Unset, empty or not a number in [0, 2] = the stock 0.1."""
+    raw = (os.getenv("SVP_LLM_TEMPERATURE") or "").strip()
+    if not raw:
+        return STOCK_LLM_TEMPERATURE
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(f"SVP_LLM_TEMPERATURE={raw!r} is not a number; using {STOCK_LLM_TEMPERATURE}")
+        return STOCK_LLM_TEMPERATURE
+    if not 0.0 <= value <= 2.0:
+        logger.warning(f"SVP_LLM_TEMPERATURE={raw!r} is outside [0, 2]; using {STOCK_LLM_TEMPERATURE}")
+        return STOCK_LLM_TEMPERATURE
+    return value
+
+
 def _llm_stall_guard_kwargs(language: str | None) -> dict:
     """Timeout + single bounded retry + spoken filler for OpenAI-compatible LLMs.
 
@@ -1075,7 +1095,7 @@ def create_llm_service_from_provider(
             )
         return OpenAILLMService(
             api_key=api_key,
-            settings=OpenAILLMSettings(model=model, temperature=0.1),
+            settings=OpenAILLMSettings(model=model, temperature=_llm_temperature()),
             **kwargs,
         )
     elif provider == ServiceProviders.GROQ.value:
