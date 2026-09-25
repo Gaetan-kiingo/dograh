@@ -69,3 +69,27 @@ def test_the_azure_voice_is_built_with_it(monkeypatch):
                           language="fr-CH", speed=1.0)  # fmt: skip
     sf.create_tts_service(SimpleNamespace(tts=tts), audio_config=None)
     assert captured["filters"] == ["XMLFunctionTagFilter", "DigitGroupsTextFilter"]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Le devis 2026-02-147 est ouvert.", "Le devis 2, 0, 2, 6. 0, 2. 1, 4, 7 est ouvert."),
+        ("Le numéro est 1-5-2.", "Le numéro est 1, 5, 2."),
+        ("La facture 65 - 2026 - 02 - 133.", "La facture 6, 5. 2, 0, 2, 6. 0, 2. 1, 3, 3."),
+    ],
+)
+def test_digits_mode_says_a_reference_digit_by_digit(text, expected):
+    # the owner's rule of 2026-09-25 (call 726: « 2026, 02, 135 » came out in thousands)
+    assert dg.said_digit_by_digit(text) == expected
+
+
+@pytest.mark.parametrize("text", ["Ouvert de 9-12 heures.", "Le montant est 1745.80 francs.", "Le 152."])
+def test_digits_mode_leaves_everything_else(text):
+    assert dg.said_digit_by_digit(text) == text
+
+
+def test_digits_mode_is_chosen_by_the_setting(monkeypatch):
+    monkeypatch.setenv("SVP_TTS_DIGIT_GROUPS", "digits")
+    (only,) = dg.svp_text_filters()
+    assert asyncio.run(only.filter("Le devis 2026-02-147.")) == "Le devis 2, 0, 2, 6. 0, 2. 1, 4, 7."
