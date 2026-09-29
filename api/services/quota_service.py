@@ -4,6 +4,7 @@ This module provides reusable quota checking functionality that can be used
 across different endpoints (WebRTC signaling, telephony, public API triggers).
 """
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,7 @@ from loguru import logger
 from api.constants import DEPLOYMENT_MODE
 from api.db import db_client
 from api.db.models import UserModel
+from api.enums import WorkflowStatus
 from api.errors.failure import (
     DograhFailure,
     ErrorSource,
@@ -673,6 +675,21 @@ async def authorize_workflow_run_start(
             error_message="Workflow not found",
         )
 
+    archived = getattr(workflow, "status", None) == WorkflowStatus.ARCHIVED.value
+    if refuses_archived() and archived:
+        # P-24 (ADR-002): an archived agent takes no call, whatever the door - telephony,
+        # browser, text chat, campaign or embed all start here
+        logger.warning(
+            "Workflow start authorization denied: workflow {} is archived (org {})",
+            workflow_id,
+            organization_id,
+        )
+        return QuotaCheckResult(
+            has_quota=False,
+            error_code="workflow_archived",
+            error_message="This agent is archived and takes no calls.",
+        )
+
     try:
         actor_id = getattr(actor_user, "id", None) if actor_user is not None else None
         if actor_user is not None and actor_id is None:
@@ -833,3 +850,13 @@ async def authorize_workflow_run_start(
             error_code="quota_check_failed",
             error_message="Could not verify Dograh credits. Please try again.",
         )
+
+
+def refuses_archived() -> bool:
+    """P-24 switch (ADR-002): SVP_REFUSE_ARCHIVED_WORKFLOWS=1. Unset = stock behaviour."""
+    return os.environ.get("SVP_REFUSE_ARCHIVED_WORKFLOWS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
