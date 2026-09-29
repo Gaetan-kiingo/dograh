@@ -24,7 +24,11 @@ from api.errors.failure import (
     log_failure,
 )
 from api.services.pipecat.audio_playback import play_audio
-from api.services.workflow.workflow_graph import Node, WorkflowGraph
+from api.services.workflow.workflow_graph import (
+    TEMPLATE_VAR_PATTERN,
+    Node,
+    WorkflowGraph,
+)
 
 if TYPE_CHECKING:
     from pipecat.frames.frames import Frame
@@ -36,6 +40,8 @@ if TYPE_CHECKING:
     LLMService = Union[OpenAILLMService, AnthropicLLMService, GoogleLLMService]
 
 import asyncio
+import os
+import re
 
 from loguru import logger
 
@@ -170,6 +176,10 @@ class PipecatEngine:
         # True when the workflow has active recordings; enables recording
         # response mode instructions on all nodes for in-context learning.
         self._has_recordings: bool = has_recordings
+        # P-10 (ADR-002): what the caller gave in earlier steps renders in later steps'
+        # instructions ({{key}}), and a step's instructions are rendered again when a
+        # background extraction brings a value they use. Unset = stock behaviour.
+        self._collected_in_prompts: bool = collected_in_prompts_enabled()
 
         # Background context summarization on node transitions
         self._context_compaction_enabled: bool = context_compaction_enabled
@@ -243,7 +253,47 @@ class PipecatEngine:
     def _format_prompt(self, prompt: str) -> str:
         """Delegate prompt formatting to the shared workflow.utils implementation."""
 
-        return render_template(prompt, self._call_context_vars)
+        return render_template(prompt, self._prompt_context())
+
+    def _prompt_context(self) -> dict:
+        """The variables a prompt renders from: the call's initial context and, with
+        P-10, the values extracted so far. The call's own variables win - a collected
+        key never replaces caller_number or svp_call."""
+        if not self._collected_in_prompts:
+            return self._call_context_vars
+        collected = self._gathered_context.get("extracted_variables") or {}
+        if not isinstance(collected, dict) or not collected:
+            return self._call_context_vars
+        return {**collected, **(self._call_context_vars or {})}
+
+    async def _refresh_prompt_with_collected(self, keys: set[str]) -> None:
+        """P-10: a background extraction finished after the next step started - its
+        instructions were rendered without the new values. Render them again when they
+        use one of those keys; the conversation and the tools stay as they are."""
+        node = self._current_node
+        if node is None or not keys:
+            return
+        texts = [node.prompt or ""]
+        if self.workflow.global_node_id and node.add_global_prompt:
+            texts.append(self.workflow.nodes[self.workflow.global_node_id].prompt or "")
+        used = {
+            m.group(1).strip()
+            for text in texts
+            for m in re.finditer(TEMPLATE_VAR_PATTERN, text)
+        }
+        if not used & keys:
+            return
+        system_prompt = compose_system_prompt_for_node(
+            node=node,
+            workflow=self.workflow,
+            format_prompt=self._format_prompt,
+            has_recordings=self._has_recordings,
+        )
+        await self.llm._update_settings(LLMSettings(system_instruction=system_prompt))
+        logger.debug(
+            f"P-10: instructions of node {node.name} rendered again with collected "
+            f"values {sorted(used & keys)}"
+        )
 
     async def _create_transition_func(
         self,
@@ -478,6 +528,9 @@ class PipecatEngine:
                 logger.debug(
                     f"Variable extraction completed for node: {node.name}. Extracted: {extracted_data}"
                 )
+                if self._collected_in_prompts and run_in_background:
+                    # the next step started while this ran (P-10)
+                    await self._refresh_prompt_with_collected(set(extracted_data))
             except Exception as e:
                 metadata = failure_metadata_for_processor(self.variable_extraction_llm)
                 log_failure(
@@ -1157,3 +1210,14 @@ class PipecatEngine:
         # Cancel any in-flight background summarization.
         if self._context_summarization_manager:
             await self._context_summarization_manager.cleanup()
+
+
+def collected_in_prompts_enabled() -> bool:
+    """P-10 switch (ADR-002): SVP_COLLECTED_IN_PROMPTS=1. Unset = stock behaviour -
+    prompts render from the call's initial context only."""
+    return os.environ.get("SVP_COLLECTED_IN_PROMPTS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
