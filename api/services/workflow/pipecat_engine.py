@@ -379,7 +379,7 @@ class PipecatEngine:
                             EndTaskReason.USER_QUALIFIED.value
                         )
 
-                result = {"status": "done"}
+                result = transition_result(self.workflow.nodes[transition_to_node].name)
 
                 properties = FunctionCallResultProperties(
                     on_context_updated=on_context_updated,
@@ -1221,3 +1221,18 @@ def collected_in_prompts_enabled() -> bool:
         "yes",
         "on",
     )
+
+
+def transition_result(step_name: str) -> dict:
+    """P-23 (ADR-002): what a step change answers the model. Stock: {"status": "done"} -
+    beside a link labelled « Rappel » the model read that the recall request was done and
+    told the caller so, with a made-up reference, the write tool never called (the owner's
+    end-of-Phase-C check, 2026-09-29). With SVP_TRANSITION_RESULT=explicit the answer says
+    where the call is and that nothing has been done yet."""
+    if os.environ.get("SVP_TRANSITION_RESULT", "").strip().lower() != "explicit":
+        return {"status": "done"}
+    return {
+        "status": "moved",
+        "step": step_name,
+        "note": "You are now in this step. Nothing has been done yet: do this step's task.",
+    }
