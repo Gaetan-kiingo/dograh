@@ -1,3 +1,4 @@
+import json
 import os
 from functools import wraps
 from typing import TYPE_CHECKING
@@ -1026,6 +1027,29 @@ def _llm_temperature() -> float:
     return value
 
 
+def _llm_extra_body(model: str) -> dict | None:
+    """P-22 (ADR-002): extra request parameters for one model, from SVP_LLM_EXTRA_BODY -
+    a JSON object mapping a model name to what its requests carry in their body (e.g.
+    Kimi K2.6's reasoning switched off: {"moonshotai/Kimi-K2.6": {"chat_template_kwargs":
+    {"thinking": false}}}). Per model, because the fallback engine refuses parameters it
+    does not know (HTTP 400). Unset, empty or malformed = stock behaviour, said in the log."""
+    raw = (os.getenv("SVP_LLM_EXTRA_BODY") or "").strip()
+    if not raw:
+        return None
+    try:
+        table = json.loads(raw)
+    except ValueError:
+        logger.warning("SVP_LLM_EXTRA_BODY is not JSON; no extra parameters sent")
+        return None
+    body = table.get(model) if isinstance(table, dict) else None
+    if body is None:
+        return None
+    if not isinstance(body, dict):
+        logger.warning(f"SVP_LLM_EXTRA_BODY[{model!r}] is not an object; none sent")
+        return None
+    return body
+
+
 def _llm_stall_guard_kwargs(language: str | None) -> dict:
     """Timeout + single bounded retry + spoken filler for OpenAI-compatible LLMs.
 
@@ -1096,9 +1120,16 @@ def create_llm_service_from_provider(
                 ),
                 **kwargs,
             )
+        extra_body = _llm_extra_body(model)
         return OpenAILLMService(
             api_key=api_key,
-            settings=OpenAILLMSettings(model=model, temperature=_llm_temperature()),
+            settings=OpenAILLMSettings(
+                model=model,
+                temperature=_llm_temperature(),
+                # P-22: sent with every request of this model - call turns and the
+                # out-of-band extraction alike
+                **({"extra": {"extra_body": extra_body}} if extra_body else {}),
+            ),
             **kwargs,
         )
     elif provider == ServiceProviders.GROQ.value:
