@@ -57,3 +57,10 @@ async def test_a_failing_filler_never_fails_the_tool():
         return "done"
 
     assert await tool_filler.with_filler(slow(), speak, "x", after_ms=20) == "done"
+
+
+def test_p25_the_agents_approved_phrase_is_spoken_instead_of_the_runtimes():
+    config = {"body_template": {"call": {"language": "fr", "filler": "  Je regarde ça  pour vous. "}}}
+    assert tool_filler.filler_text(config) == "Je regarde ça pour vous."
+    # blank = the runtime's own phrase for the language
+    assert tool_filler.filler_text({"body_template": {"call": {"language": "de", "filler": "  "}}}) == tool_filler.FILLERS["de"]

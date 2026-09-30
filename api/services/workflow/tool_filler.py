@@ -6,7 +6,8 @@ is a rule, not a guarantee, and it says nothing about a tool that takes four
 seconds. With ``SVP_TOOL_FILLER_AFTER_MS`` set (2000 in the platform's compose
 override), the engine speaks the filler for the call's language once, when a tool has
 not answered after that many milliseconds, then keeps waiting up to the tool's own
-timeout. Unset or 0 = stock behaviour (no runtime filler).
+timeout. Unset or 0 = stock behaviour (no runtime filler). P-25: the platform may write
+the agent's own approved phrase into the tool's ``call.filler``; it is spoken instead.
 """
 
 from __future__ import annotations
@@ -41,7 +42,12 @@ def language_of(config: dict[str, Any] | None) -> str:
 
 
 def filler_text(config: dict[str, Any] | None) -> str:
-    return FILLERS[language_of(config)]
+    """P-25 (ADR-044 point 1): the phrase the customer approved for this agent, written by
+    the platform into the tool's body template (``call.filler``); the runtime's own
+    phrase for the call's language when absent."""
+    call = ((config or {}).get("body_template") or {}).get("call") or {}
+    approved = " ".join(str(call.get("filler") or "").split())
+    return approved or FILLERS[language_of(config)]
 
 
 async def with_filler(
