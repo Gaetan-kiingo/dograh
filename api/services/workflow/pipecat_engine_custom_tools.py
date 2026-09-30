@@ -459,7 +459,24 @@ class CustomToolManager:
                 }
                 # P-18 (ADR-033 point 6, PERF-008): a progress phrase in the call's
                 # language when the tool has not answered after SVP_TOOL_FILLER_AFTER_MS
-                from api.services.workflow.tool_filler import filler_text, with_filler
+                from api.services.workflow.tool_filler import (
+                    approved_filler,
+                    filler_text,
+                    with_filler,
+                )
+
+                # P-25 (ADR-044 point 1): the phrase the customer approved for this agent,
+                # from the run's configurations - read once per run
+                if getattr(self._engine, "_svp_filler", None) is None:
+                    self._engine._svp_filler = ""
+                    try:
+                        self._engine._svp_filler = approved_filler(
+                            await db_client.get_workflow_run_configurations(
+                                self._engine._workflow_run_id, await self.get_organization_id()
+                            )
+                        )
+                    except Exception as e:  # the filler must never fail the tool
+                        logger.warning(f"P-25: could not read the approved filler: {e}")
 
                 async def _speak_filler(text: str) -> None:
                     logger.info(f"P-18: tool '{function_name}' is slow, speaking the filler")
@@ -480,7 +497,7 @@ class CustomToolManager:
                         organization_id=await self.get_organization_id(),
                     ),
                     _speak_filler,
-                    filler_text(config),
+                    filler_text(config, self._engine._svp_filler),
                 )
 
                 await function_call_params.result_callback(result)

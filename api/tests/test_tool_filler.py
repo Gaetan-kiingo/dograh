@@ -60,7 +60,10 @@ async def test_a_failing_filler_never_fails_the_tool():
 
 
 def test_p25_the_agents_approved_phrase_is_spoken_instead_of_the_runtimes():
-    config = {"body_template": {"call": {"language": "fr", "filler": "  Je regarde ça  pour vous. "}}}
-    assert tool_filler.filler_text(config) == "Je regarde ça pour vous."
-    # blank = the runtime's own phrase for the language
-    assert tool_filler.filler_text({"body_template": {"call": {"language": "de", "filler": "  "}}}) == tool_filler.FILLERS["de"]
+    config = {"body_template": {"call": {"language": "fr"}}}
+    approved = tool_filler.approved_filler({"svp_phrases": {"filler": "  Je regarde ça  pour vous. "}})
+    assert approved == "Je regarde ça pour vous."
+    assert tool_filler.filler_text(config, approved) == "Je regarde ça pour vous."
+    # nothing written by the platform = the runtime's own phrase for the language
+    assert tool_filler.approved_filler({"svp_publish": {"version": 3}}) == ""
+    assert tool_filler.filler_text({"body_template": {"call": {"language": "de"}}}, "") == tool_filler.FILLERS["de"]

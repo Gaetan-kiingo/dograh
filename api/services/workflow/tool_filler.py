@@ -7,7 +7,9 @@ seconds. With ``SVP_TOOL_FILLER_AFTER_MS`` set (2000 in the platform's compose
 override), the engine speaks the filler for the call's language once, when a tool has
 not answered after that many milliseconds, then keeps waiting up to the tool's own
 timeout. Unset or 0 = stock behaviour (no runtime filler). P-25: the platform may write
-the agent's own approved phrase into the tool's ``call.filler``; it is spoken instead.
+the agent's own approved phrase into the workflow's configurations (``svp_phrases.filler``);
+it is spoken instead - one tool definition serves every agent of a workspace, so the phrase
+cannot live on the tool.
 """
 
 from __future__ import annotations
@@ -41,13 +43,19 @@ def language_of(config: dict[str, Any] | None) -> str:
     return language if language in FILLERS else "fr"
 
 
-def filler_text(config: dict[str, Any] | None) -> str:
-    """P-25 (ADR-044 point 1): the phrase the customer approved for this agent, written by
-    the platform into the tool's body template (``call.filler``); the runtime's own
-    phrase for the call's language when absent."""
-    call = ((config or {}).get("body_template") or {}).get("call") or {}
-    approved = " ".join(str(call.get("filler") or "").split())
-    return approved or FILLERS[language_of(config)]
+def filler_text(config: dict[str, Any] | None, approved: str | None = None) -> str:
+    """The phrase spoken when a tool is slow: P-25 (ADR-044 point 1) - the sentence the
+    customer approved for this agent, from the run's workflow configurations
+    (``svp_phrases.filler``, frozen per run like every configuration) - or the runtime's
+    own phrase for the call's language."""
+    text = " ".join(str(approved or "").split())
+    return text or FILLERS[language_of(config)]
+
+
+def approved_filler(configurations: dict[str, Any] | None) -> str:
+    """P-25: what the platform wrote for this workflow, "" when nothing."""
+    phrases = (configurations or {}).get("svp_phrases") or {}
+    return " ".join(str(phrases.get("filler") or "").split())
 
 
 async def with_filler(
