@@ -351,11 +351,30 @@ class PipecatEngine:
                     self._queued_speech_mute_state = "waiting"
                     await self.task.queue_frame(
                         TTSSpeakFrame(
-                            transition_speech,
+                            # P-27: rendered, so the next step's first sentence may name
+                            # what the caller gave ({{prenom}})
+                            self._format_prompt(transition_speech)
+                            if transition_speech_ends_turn()
+                            else transition_speech,
                             append_to_context=False,
                             persist_to_logs=True,
                         )
                     )
+                # P-27 (Swiss Voice Platform, ADR-002): the spoken transition speech IS the
+                # next step's first sentence - no second model call for it; the model is
+                # next called on the caller's answer, under the new step's prompt, and the
+                # transition result tells it what was said. Not for the closing step, whose
+                # goodbye the stock flow speaks before hanging up.
+                spoken = (
+                    transition_speech
+                    if transition_speech and speech_type != "audio"
+                    else None
+                )
+                ends_turn = (
+                    transition_speech_ends_turn()
+                    and spoken is not None
+                    and not self.workflow.nodes[transition_to_node].is_end
+                )
 
                 # Set context for the new node, so that when the function call result
                 # frame is received by LLMContextAggregator and an LLM generation
@@ -379,11 +398,20 @@ class PipecatEngine:
                             EndTaskReason.USER_QUALIFIED.value
                         )
 
-                result = transition_result(self.workflow.nodes[transition_to_node].name)
+                result = transition_result(
+                    self.workflow.nodes[transition_to_node].name,
+                    said=self._format_prompt(spoken) if ends_turn and spoken else None,
+                )
 
                 properties = FunctionCallResultProperties(
                     on_context_updated=on_context_updated,
+                    **({"run_llm": False} if ends_turn else {}),
                 )
+                if ends_turn:
+                    logger.info(
+                        f"P-27: transition speech ends the turn; no generation for the step "
+                        f"change to {transition_to_node}"
+                    )
 
                 # Call results callback from the pipecat framework
                 # so that a new llm generation can be triggred if
@@ -1223,16 +1251,33 @@ def collected_in_prompts_enabled() -> bool:
     )
 
 
-def transition_result(step_name: str) -> dict:
+def transition_result(step_name: str, said: Optional[str] = None) -> dict:
     """P-23 (ADR-002): what a step change answers the model. Stock: {"status": "done"} -
     beside a link labelled « Rappel » the model read that the recall request was done and
     told the caller so, with a made-up reference, the write tool never called (the owner's
     end-of-Phase-C check, 2026-09-29). With SVP_TRANSITION_RESULT=explicit the answer says
-    where the call is and that nothing has been done yet."""
+    where the call is and that nothing has been done yet; with P-27, what the runtime has
+    just said to the caller in the model's place (`said`), so the model does not say it
+    again at the next turn."""
     if os.environ.get("SVP_TRANSITION_RESULT", "").strip().lower() != "explicit":
-        return {"status": "done"}
-    return {
+        return {"status": "done"} if not said else {"status": "done", "said": said}
+    result = {
         "status": "moved",
         "step": step_name,
         "note": "You are now in this step. Nothing has been done yet: do this step's task.",
     }
+    if said:
+        result["said"] = said
+        result["note"] = (
+            "You are now in this step. You have just said the sentence in `said` to the "
+            "caller; wait for the answer, do not repeat it. Nothing else has been done yet."
+        )
+    return result
+
+
+def transition_speech_ends_turn() -> bool:
+    """P-27 switch (ADR-002): SVP_TRANSITION_SPEECH_ENDS_TURN=1 - an edge's transition
+    speech is the next step's first sentence, spoken by the runtime, and no model call
+    follows the step change. Unset = stock behaviour: the speech is a filler and the
+    model generates the step's first words after it."""
+    return os.environ.get("SVP_TRANSITION_SPEECH_ENDS_TURN", "").strip() == "1"
