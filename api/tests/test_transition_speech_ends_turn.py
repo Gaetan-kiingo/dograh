@@ -1,18 +1,20 @@
 """P-27 (ADR-002; CF-131): an edge's transition speech is the next step's first sentence,
-spoken by the runtime at the step change, and no model call follows - the model is next
-called on the caller's answer and is told what was said. SVP_TRANSITION_SPEECH_ENDS_TURN=1;
-unset = stock behaviour (the speech is a filler, the model generates the step's first words)."""
+spoken by the runtime at the step change; the model is told what was said. SVP_TRANSITION_SPEECH=bridge
+(the model is still called and adds words only when the turn needs more - a referral, « I don't
+know ») or ends_turn (no model call follows); unset = stock behaviour."""
 
-from api.services.workflow.pipecat_engine import transition_result, transition_speech_ends_turn
+from api.services.workflow.pipecat_engine import transition_result, transition_speech_mode
 
 
 def test_p27_switch(monkeypatch):
-    monkeypatch.delenv("SVP_TRANSITION_SPEECH_ENDS_TURN", raising=False)
-    assert transition_speech_ends_turn() is False
-    monkeypatch.setenv("SVP_TRANSITION_SPEECH_ENDS_TURN", "1")
-    assert transition_speech_ends_turn() is True
-    monkeypatch.setenv("SVP_TRANSITION_SPEECH_ENDS_TURN", "yes")
-    assert transition_speech_ends_turn() is False
+    monkeypatch.delenv("SVP_TRANSITION_SPEECH", raising=False)
+    assert transition_speech_mode() == ""
+    monkeypatch.setenv("SVP_TRANSITION_SPEECH", "bridge")
+    assert transition_speech_mode() == "bridge"
+    monkeypatch.setenv("SVP_TRANSITION_SPEECH", "ends_turn")
+    assert transition_speech_mode() == "ends_turn"
+    monkeypatch.setenv("SVP_TRANSITION_SPEECH", "1")
+    assert transition_speech_mode() == ""  # stock: an unknown value switches nothing on
 
 
 def test_p27_the_result_tells_the_model_what_was_said(monkeypatch):

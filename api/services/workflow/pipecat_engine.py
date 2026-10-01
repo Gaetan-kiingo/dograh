@@ -354,7 +354,7 @@ class PipecatEngine:
                             # P-27: rendered, so the next step's first sentence may name
                             # what the caller gave ({{prenom}})
                             self._format_prompt(transition_speech)
-                            if transition_speech_ends_turn()
+                            if transition_speech_mode()
                             else transition_speech,
                             append_to_context=False,
                             persist_to_logs=True,
@@ -370,11 +370,18 @@ class PipecatEngine:
                     if transition_speech and speech_type != "audio"
                     else None
                 )
-                ends_turn = (
-                    transition_speech_ends_turn()
+                mode = transition_speech_mode()
+                first_sentence = (
+                    bool(mode)
                     and spoken is not None
                     and not self.workflow.nodes[transition_to_node].is_end
                 )
+                # "ends_turn": no model call follows; "bridge": the sentence plays at once
+                # and the model is still called, told what was said - it adds words only
+                # when the caller's turn needs more than the step's first question (a
+                # referral, « I don't know »: the suite's regulated_advice and
+                # unsupported_answer scenarios, found 2026-10-01 with ends_turn)
+                ends_turn = first_sentence and mode == "ends_turn"
 
                 # Set context for the new node, so that when the function call result
                 # frame is received by LLMContextAggregator and an LLM generation
@@ -400,17 +407,17 @@ class PipecatEngine:
 
                 result = transition_result(
                     self.workflow.nodes[transition_to_node].name,
-                    said=self._format_prompt(spoken) if ends_turn and spoken else None,
+                    said=self._format_prompt(spoken) if first_sentence and spoken else None,
                 )
 
                 properties = FunctionCallResultProperties(
                     on_context_updated=on_context_updated,
                     **({"run_llm": False} if ends_turn else {}),
                 )
-                if ends_turn:
+                if first_sentence:
                     logger.info(
-                        f"P-27: transition speech ends the turn; no generation for the step "
-                        f"change to {transition_to_node}"
+                        f"P-27 ({mode}): the step's first sentence spoken at the change to "
+                        f"{transition_to_node}; generation {'skipped' if ends_turn else 'follows'}"
                     )
 
                 # Call results callback from the pipecat framework
@@ -1275,9 +1282,12 @@ def transition_result(step_name: str, said: Optional[str] = None) -> dict:
     return result
 
 
-def transition_speech_ends_turn() -> bool:
-    """P-27 switch (ADR-002): SVP_TRANSITION_SPEECH_ENDS_TURN=1 - an edge's transition
-    speech is the next step's first sentence, spoken by the runtime, and no model call
-    follows the step change. Unset = stock behaviour: the speech is a filler and the
-    model generates the step's first words after it."""
-    return os.environ.get("SVP_TRANSITION_SPEECH_ENDS_TURN", "").strip() == "1"
+def transition_speech_mode() -> str:
+    """P-27 switch (ADR-002): SVP_TRANSITION_SPEECH - an edge's transition speech is the
+    next step's first sentence, spoken by the runtime at the step change, rendered from
+    the collected values, and the model is told what was said. "bridge": the model is
+    still called and adds words only when the turn needs more than that sentence;
+    "ends_turn": no model call follows. Unset or anything else = stock behaviour: the
+    speech is a filler and the model generates the step's first words after it."""
+    value = os.environ.get("SVP_TRANSITION_SPEECH", "").strip().lower()
+    return value if value in ("bridge", "ends_turn") else ""
