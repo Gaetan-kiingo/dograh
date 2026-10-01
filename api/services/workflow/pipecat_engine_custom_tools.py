@@ -481,9 +481,12 @@ class CustomToolManager:
                 async def _speak_filler(text: str) -> None:
                     logger.info(f"P-18: tool '{function_name}' is slow, speaking the filler")
                     self._engine._queued_speech_mute_state = "waiting"
-                    await self._engine.task.queue_frame(
-                        TTSSpeakFrame(text, append_to_context=False, persist_to_logs=True)
+                    frame = TTSSpeakFrame(
+                        text, append_to_context=False, persist_to_logs=True
                     )
+                    # P-28 (ADR-002): the timeline says this sentence was the progress phrase
+                    frame.svp_progress = True
+                    await self._engine.task.queue_frame(frame)
 
                 result = await with_filler(
                     execute_http_tool(

@@ -31,6 +31,7 @@ from api.errors.failure import (
     failure_metadata_for_processor,
     log_failure,
 )
+from api.services.pipecat import turn_timing
 from api.services.pipecat.realtime_feedback_events import (
     build_bot_text_event,
     build_function_call_end_event,
@@ -103,6 +104,8 @@ class RealtimeFeedbackObserver(BaseObserver):
         self._ws_sender = ws_sender
         self._logs_buffer = logs_buffer
         self._frames_seen: Set[str] = set()
+        # P-28 (ADR-002): the marks of a turn's timing kept with the run; off = stock
+        self._turn_timing = turn_timing.enabled()
 
     async def cleanup(self):
         """Clean up resources. Must be called when the observer is no longer needed."""
@@ -150,10 +153,14 @@ class RealtimeFeedbackObserver(BaseObserver):
             await self._send_ws(
                 {"type": RealtimeFeedbackType.BOT_STARTED_SPEAKING.value, "payload": {}}
             )
+            if self._turn_timing:
+                await self._append_to_buffer(turn_timing.mark(turn_timing.BOT_STARTED))
         elif isinstance(frame, BotStoppedSpeakingFrame):
             await self._send_ws(
                 {"type": RealtimeFeedbackType.BOT_STOPPED_SPEAKING.value, "payload": {}}
             )
+            if self._turn_timing:
+                await self._append_to_buffer(turn_timing.mark(turn_timing.BOT_STOPPED))
         # User mute state - WS only (ephemeral state signals, not persisted)
         elif isinstance(frame, UserMuteStartedFrame):
             await self._send_ws(
@@ -191,6 +198,11 @@ class RealtimeFeedbackObserver(BaseObserver):
         elif isinstance(frame, TTSSpeakFrame):
             if getattr(frame, "persist_to_logs", False):
                 await self._append_to_buffer(build_bot_text_event(text=frame.text))
+            # P-28: which sentence was the progress phrase (P-18 flags its frame)
+            if self._turn_timing and getattr(frame, "svp_progress", False):
+                await self._append_to_buffer(
+                    turn_timing.mark(turn_timing.PROGRESS_PHRASE)
+                )
         # Handle bot TTS text after output transport timing, WebSocket only
         # Complete turn text is persisted via register_turn_handlers,
         # except for frames explicitly flagged persist_to_logs (e.g. recording
@@ -240,6 +252,18 @@ class RealtimeFeedbackObserver(BaseObserver):
                                 model=metric_data.model,
                             )
                         )
+                    # P-28: the speech services' first byte, which stock drops
+                    elif self._turn_timing and metric_data.value > 0:
+                        service = turn_timing.service_of(metric_data.processor)
+                        if service:
+                            await self._append_to_buffer(
+                                turn_timing.mark(
+                                    turn_timing.FIRST_BYTE,
+                                    service=service,
+                                    seconds=metric_data.value,
+                                    model=metric_data.model,
+                                )
+                            )
         # Handle pipeline errors
         elif isinstance(frame, ErrorFrame):
             processor_name = str(frame.processor) if frame.processor else None
