@@ -32,7 +32,8 @@ from loguru import logger
 
 PREFIX = "secretref:"
 _ALLOWED_NAME = re.compile(r"^SVP_PROVIDER_[A-Z0-9_]{1,64}$")
-_SECRET_FIELDS = ("api_key",)
+# a key, or a service account's JSON (Google, Swiss Voice Platform C11 - P-13 amendment)
+_SECRET_FIELDS = ("api_key", "credentials")
 _SECTIONS = ("llm", "stt", "tts", "embeddings", "realtime")
 
 KEY_SERVICE_TIMEOUT = 5.0

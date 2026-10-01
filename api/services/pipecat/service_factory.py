@@ -1154,11 +1154,23 @@ def create_llm_service_from_provider(
             settings=GoogleLLMSettings(model=model, temperature=0.1),
         )
     elif provider == ServiceProviders.GOOGLE_VERTEX.value:
+        # P-19 temperature and P-22 extra parameters for the Vertex service too (Swiss Voice
+        # Platform, 2026-09-30): Gemini 2.5 thinks by default, so the registry gives it a
+        # `thinking_budget` which maps onto the service's thinking configuration
+        vertex_extra = dict(_llm_extra_body(model) or {})
+        thinking: dict = {}
+        for key in ("thinking_budget", "thinking_level", "include_thoughts"):
+            if key in vertex_extra:
+                thinking[key] = vertex_extra.pop(key)
         return DograhGoogleVertexLLMService(
             credentials=credentials,
             project_id=project_id,
             location=location or "us-east4",
-            settings=GoogleVertexLLMSettings(model=model, temperature=0.1),
+            settings=GoogleVertexLLMSettings(
+                model=model,
+                temperature=_llm_temperature(),
+                **({"thinking": GoogleLLMService.ThinkingConfig(**thinking)} if thinking else {}),
+            ),
         )
     elif provider == ServiceProviders.AZURE.value:
         if endpoint:
