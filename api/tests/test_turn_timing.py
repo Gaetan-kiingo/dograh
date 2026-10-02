@@ -8,6 +8,7 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     MetricsFrame,
+    SVPTimingMarkFrame,
     TTSSpeakFrame,
 )
 from pipecat.metrics.metrics import TTFBMetricsData
@@ -137,3 +138,18 @@ async def test_a_sentence_of_the_engine_that_is_not_the_progress_phrase_is_not_m
         [TTSSpeakFrame("Je vous transfère.", persist_to_logs=True)]
     )
     assert [e["type"] for e in events] == ["rtf-bot-text"]
+
+
+@pytest.mark.asyncio
+async def test_a_components_timing_mark_is_kept_with_the_run_only_when_on(monkeypatch):
+    frame = lambda: SVPTimingMarkFrame(  # noqa: E731
+        mark="early_start", data={"mode": "observe", "outcome": "resumed"}
+    )
+    monkeypatch.delenv("SVP_TURN_TIMING", raising=False)
+    assert await _observe([frame()]) == []
+    monkeypatch.setenv("SVP_TURN_TIMING", "on")
+    [event] = await _observe([frame()])
+    assert event == {
+        "type": "svp-timing",
+        "payload": {"mark": "early_start", "mode": "observe", "outcome": "resumed"},
+    }

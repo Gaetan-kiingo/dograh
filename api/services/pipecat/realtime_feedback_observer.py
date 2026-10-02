@@ -59,6 +59,7 @@ from pipecat.frames.frames import (
     InterruptionFrame,
     MetricsFrame,
     StopFrame,
+    SVPTimingMarkFrame,
     TranscriptionFrame,
     TTSSpeakFrame,
     TTSTextFrame,
@@ -264,6 +265,13 @@ class RealtimeFeedbackObserver(BaseObserver):
                                     model=metric_data.model,
                                 )
                             )
+        # P-29 (experiment): a timing mark a pipeline component reports, e.g. what an
+        # early start on the interim transcript would have had
+        elif isinstance(frame, SVPTimingMarkFrame):
+            if self._turn_timing:
+                await self._append_to_buffer(
+                    turn_timing.mark(frame.mark, **dict(frame.data))
+                )
         # Handle pipeline errors
         elif isinstance(frame, ErrorFrame):
             processor_name = str(frame.processor) if frame.processor else None
