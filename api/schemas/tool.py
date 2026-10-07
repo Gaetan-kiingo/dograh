@@ -140,6 +140,13 @@ class HttpApiConfig(BaseModel):
     customMessageRecordingId: str | None = Field(
         default=None, description="Recording ID for an audio custom message."
     )
+    # P-32 (Swiss Voice Platform, ADR-002): the tool's kind as its contract says it -
+    # a step with a `write` tool keeps its transitions until that tool has answered.
+    # Absent = a stock tool: nothing is held.
+    svp_kind: Literal["read", "write"] | None = Field(
+        default=None,
+        description="Swiss Voice Platform: the tool's kind (read or write) from its contract.",
+    )
     body_template: dict[str, Any] | None = Field(
         default=None,
         description="Optional JSON body template for POST, PUT, and PATCH requests.",

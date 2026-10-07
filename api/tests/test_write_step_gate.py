@@ -207,3 +207,15 @@ async def test_p32_an_answer_from_another_step_changes_nothing(monkeypatch):
     engine._current_node = engine.workflow.nodes["other"]  # a late answer after a step change
     await engine.release_write_gate("book_appointment")
     assert engine._svp_gate_node_id == held  # the booking step's record is left as it was
+
+
+def test_p32_the_tool_schema_keeps_the_marker():
+    """The runtime validates a tool's config through HttpApiConfig and drops unknown keys:
+    the platform's marker must be a declared field, or the gate never engages (found on
+    the first measured call, 2026-10-07)."""
+    from api.schemas.tool import HttpApiConfig
+
+    kept = HttpApiConfig.model_validate({"method": "POST", "url": "http://gw/execute/x", "svp_kind": "write"})
+    assert kept.svp_kind == "write"
+    assert HttpApiConfig.model_validate({"method": "GET", "url": "http://gw/x"}).svp_kind is None
+    assert "svp_kind" in kept.model_dump()
