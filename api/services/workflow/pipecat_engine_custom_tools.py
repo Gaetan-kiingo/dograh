@@ -68,6 +68,14 @@ def _render_transfer_destination(
     return str(rendered).strip()
 
 
+def is_svp_write_tool(tool: Any) -> bool:
+    """P-32 (Swiss Voice Platform, ADR-002): the platform marks a write tool with
+    `svp_kind: write` in its definition's config (from the tool's contract)."""
+    definition = getattr(tool, "definition", None) or {}
+    config = definition.get("config") or {} if isinstance(definition, dict) else {}
+    return str(config.get("svp_kind") or "").lower() == "write"
+
+
 def get_function_schema(
     function_name: str,
     description: str,
@@ -103,6 +111,9 @@ class CustomToolManager:
 
     def __init__(self, engine: "PipecatEngine") -> None:
         self._engine = engine
+        # P-32 (ADR-002): function name -> the tool is a write (`svp_kind: write` in its
+        # definition's config, set by the platform from the tool's contract)
+        self.svp_write_functions: dict[str, bool] = {}
 
     async def _play_config_message(
         self, config: dict, *, append_to_context: bool = False
@@ -210,6 +221,7 @@ class CustomToolManager:
 
                 raw_schema = tool_to_function_schema(tool)
                 function_name = raw_schema["function"]["name"]
+                self.svp_write_functions[function_name] = is_svp_write_tool(tool)
 
                 # Convert to FunctionSchema object for compatibility with update_llm_context
                 func_schema = get_function_schema(
@@ -503,10 +515,16 @@ class CustomToolManager:
                     filler_text(config, self._engine._svp_filler),
                 )
 
+                # P-32 (ADR-002): a write tool of the step has answered - the step's
+                # transitions are given back before the model reads the answer
+                if is_svp_write_tool(tool):
+                    await self._engine.release_write_gate(function_name)
                 await function_call_params.result_callback(result)
 
             except Exception as e:
                 logger.error(f"HTTP tool '{function_name}' execution failed: {e}")
+                if is_svp_write_tool(tool):
+                    await self._engine.release_write_gate(function_name)
                 await function_call_params.result_callback(
                     {"status": "error", "error": str(e)}
                 )

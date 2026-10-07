@@ -97,6 +97,9 @@ def create_generation_started_callback(engine: "PipecatEngine"):
         logger.debug("LLM generation started in callback processor")
         # Clear reference text from previous generation
         engine._current_llm_generation_reference_text = ""
+        # P-32: how many model turns the write step's gate held (evidence in the log)
+        if getattr(engine, "_svp_gate_node_id", None) is not None:
+            engine._svp_gate_turns = getattr(engine, "_svp_gate_turns", 0) + 1
 
     return handle_generation_started
 

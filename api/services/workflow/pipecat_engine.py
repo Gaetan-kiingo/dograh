@@ -149,6 +149,13 @@ class PipecatEngine:
         # Custom tool manager (initialized in initialize())
         self._custom_tool_manager: Optional[CustomToolManager] = None
 
+        # P-32 (Swiss Voice Platform, ADR-002): the step whose transitions are held
+        # back until one of its write tools has answered, the full function list to
+        # give back at that moment, and how many model turns the gate held.
+        self._svp_gate_node_id: Optional[str] = None
+        self._svp_gate_functions: list = []
+        self._svp_gate_turns: int = 0
+
         # Cached organization ID (resolved lazily from workflow run)
         self._organization_id: Optional[int] = None
 
@@ -697,7 +704,64 @@ class PipecatEngine:
             node=node,
             custom_tool_manager=self._custom_tool_manager,
         )
+        functions = self._hold_transitions_for_write_step(node, functions)
         await self._update_llm_context(system_prompt, functions)
+
+    def _hold_transitions_for_write_step(self, node: Node, functions: list) -> list:
+        """P-32 (ADR-002; CF-164): a step with a write tool cannot be left before that
+        tool has answered. On 2026-10-07 (« Coiffeur Nico », runs 37 and 1375) the
+        model arrived in the booking step, said the appointment was confirmed and moved
+        on without calling the booking tool: the model that talks also chose the
+        transition, in the same completion. Here the step's transition functions are
+        kept out of the model's list until one of the step's write tools (marked
+        `svp_kind: write` in its definition by the platform) has answered - whatever it
+        answered: a proposal awaiting the caller's yes, a result, a refusal of the
+        arguments, an error. Nothing in the conversation is changed, no model is asked to
+        judge; the runtime counts. Unset = stock behaviour."""
+        self._svp_gate_node_id = None
+        self._svp_gate_functions = []
+        self._svp_gate_turns = 0
+        if not write_step_gate_enabled() or node.is_end or not node.out_edges:
+            return functions
+        manager = self._custom_tool_manager
+        write_names = {
+            f.name
+            for f in functions
+            if manager is not None and manager.svp_write_functions.get(f.name)
+        }
+        if not write_names:
+            return functions
+        transitions = {edge.get_function_name() for edge in node.out_edges}
+        held = [f for f in functions if f.name not in transitions]
+        self._svp_gate_node_id = node.id
+        self._svp_gate_functions = list(functions)
+        logger.info(
+            f"P-32: step '{node.name}' holds its {len(transitions)} transition(s) until "
+            f"a write tool answers ({sorted(write_names)})"
+        )
+        return held
+
+    def write_gate_holds(self) -> bool:
+        """P-32: whether the current step's transitions are being held back."""
+        return self._svp_gate_node_id is not None
+
+    async def release_write_gate(self, function_name: str) -> None:
+        """P-32: a write tool of the held step has answered - the step's transitions are
+        given back to the model for its next completion. A tool of another step, or a
+        step that is not held, changes nothing."""
+        node = self._current_node
+        if self._svp_gate_node_id is None or node is None or node.id != self._svp_gate_node_id:
+            return
+        functions, turns = self._svp_gate_functions, self._svp_gate_turns
+        self._svp_gate_node_id = None
+        self._svp_gate_functions = []
+        self._svp_gate_turns = 0
+        if functions:
+            self.context.set_tools(ToolsSchema(standard_tools=functions))
+        logger.info(
+            f"P-32: step '{node.name}' released after '{function_name}' answered "
+            f"({turns} model turn(s) held)"
+        )
 
     async def set_node(self, node_id: str, emit_transition_event: bool = True):
         """
@@ -1256,6 +1320,12 @@ def collected_in_prompts_enabled() -> bool:
         "yes",
         "on",
     )
+
+
+def write_step_gate_enabled() -> bool:
+    """P-32 switch (ADR-002; CF-164): SVP_WRITE_STEP_GATE=on. Unset = stock behaviour -
+    a step's transitions are offered to the model from the step's first turn."""
+    return os.environ.get("SVP_WRITE_STEP_GATE", "").strip().lower() in ("on", "1", "true")
 
 
 def transition_result(step_name: str, said: Optional[str] = None) -> dict:
