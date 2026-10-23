@@ -17,6 +17,7 @@ receive a normalized config dict containing credentials plus a
 joining ``telephony_phone_numbers``.
 """
 
+import os
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 from loguru import logger
@@ -306,6 +307,24 @@ def get_setup_checklist(
     )
 
 
+def telephony_secret_references_enabled() -> bool:
+    return os.environ.get("SVP_TELEPHONY_SECRET_REFS", "").strip().lower() in ("on", "1", "true")
+
+
+def resolve_telephony_secret_references(config: Dict[str, Any]) -> Dict[str, Any]:
+    """P-34: every `secretref:SVP_PROVIDER_*` value of a telephony configuration replaced
+    by the secret the runtime's environment holds; a missing secret raises - the call
+    fails closed rather than signing with the reference text."""
+    if not telephony_secret_references_enabled():
+        return config
+    from api.services.configuration.secret_refs import is_reference, resolve_value
+
+    return {
+        key: (resolve_value(value) if is_reference(value) else value)
+        for key, value in config.items()
+    }
+
+
 async def _normalize_with_phone_numbers(
     row: TelephonyConfigurationModel,
 ) -> Dict[str, Any]:
@@ -322,6 +341,12 @@ async def _normalize_with_phone_numbers(
     raw = dict(row.credentials or {})
     raw["provider"] = row.provider
     base = spec.config_loader(raw)
+    # P-34 (Swiss Voice Platform, ADR-002 / ADR-053; ADR-014): a carrier's secret - Twilio's
+    # auth token - is stored as `secretref:SVP_PROVIDER_*` and resolved from the runtime's
+    # environment here, the one place every reader of a configuration passes through
+    # (signature checks, the media transport, the number's VoiceUrl sync). The account
+    # SID stays literal: the inbound lookup matches on it. Unset = stock (values as stored).
+    base = resolve_telephony_secret_references(base)
 
     addresses = await db_client.list_active_normalized_addresses_for_config(row.id)
     base["from_numbers"] = addresses

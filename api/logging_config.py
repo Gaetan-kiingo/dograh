@@ -1,4 +1,6 @@
 import logging
+from contextvars import ContextVar
+import re
 import os
 import sys
 
@@ -48,11 +50,36 @@ class InterceptHandler(logging.Handler):
         ).log(level, record.getMessage())
 
 
+# P-36 (Swiss Voice Platform, ADR-002; CF-062, SEC-008, DES-012): with SVP_LOG_REDACT=on every
+# log message has phone numbers and e-mail addresses masked before it is written - the
+# runtime's lines name callers otherwise (run names, transcripts at DEBUG); and the trace the
+# platform sends (W3C traceparent) is kept on the record as `trace_id`. Unset = stock.
+_PHONE = re.compile(r"(?<![\w])\+?\d[\d\s().-]{6,}\d(?![\w])")
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+trace_id_var: ContextVar[str] = ContextVar("svp_trace_id", default="")
+
+
+def log_redaction_enabled() -> bool:
+    return os.environ.get("SVP_LOG_REDACT", "").strip().lower() in ("on", "1", "true")
+
+
+def redact(text: str) -> str:
+    """Phone numbers keep their last two digits, e-mail addresses their domain."""
+    def _phone(m):
+        digits = re.sub(r"\D", "", m.group(0))
+        return "…" + digits[-2:] if len(digits) >= 7 else m.group(0)
+    text = _PHONE.sub(_phone, text)
+    return _EMAIL.sub(lambda m: "…@" + m.group(0).split("@", 1)[1], text)
+
+
 def enrich_log_record(record):
     """Inject run context and conservatively classify every ERROR record."""
 
     extra = record["extra"]
     extra["run_id"] = run_id_var.get()
+    extra["trace_id"] = trace_id_var.get()
+    if log_redaction_enabled():
+        record["message"] = redact(str(record["message"]))
 
     if record["level"].no < logging.ERROR:
         return

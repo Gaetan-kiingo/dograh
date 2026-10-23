@@ -84,6 +84,45 @@ async def handle_twiml_webhook(
     return HTMLResponse(content=response_content, media_type="application/xml")
 
 
+@router.post("/twilio/status")
+async def handle_twilio_number_status(request: Request):
+    """P-35 (Swiss Voice Platform, ADR-002 / ADR-053): the status callback set on the NUMBER
+    (`configure_inbound`), for inbound calls - the run is found by Twilio's CallSid, the
+    signature checked with the run's own configuration, then the status processed like a
+    per-run callback. A call that ended before its run existed is acknowledged and ignored."""
+    form_data = await request.form()
+    callback_data = dict(form_data)
+    call_sid = str(callback_data.get("CallSid") or "")
+    if not call_sid:
+        return {"status": "ignored", "reason": "no_call_sid"}
+    workflow_run = await db_client.get_workflow_run_by_call_id(call_sid)
+    if not workflow_run:
+        logger.info(f"P-35: status {callback_data.get('CallStatus')!r} for unknown call {call_sid}")
+        return {"status": "ignored", "reason": "workflow_run_not_found"}
+    set_current_run_id(workflow_run.id)
+    workflow = await db_client.get_workflow_by_id(workflow_run.workflow_id)
+    if not workflow:
+        return {"status": "ignored", "reason": "workflow_not_found"}
+    provider = await get_telephony_provider_for_run(workflow_run, workflow.organization_id)
+    if not await provider.verify_inbound_signature(
+        str(request.url), callback_data, dict(request.headers)
+    ):
+        logger.warning(f"P-35: invalid signature on the number status callback for run {workflow_run.id}")
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    parsed_data = provider.parse_status_callback(callback_data)
+    status_update = StatusCallbackRequest(
+        call_id=parsed_data["call_id"],
+        status=parsed_data["status"],
+        from_number=parsed_data.get("from_number"),
+        to_number=parsed_data.get("to_number"),
+        direction=parsed_data.get("direction"),
+        duration=parsed_data.get("duration"),
+        extra=parsed_data.get("extra", {}),
+    )
+    await _process_status_update(workflow_run.id, status_update)
+    return {"status": "success"}
+
+
 @router.post("/twilio/status-callback/{workflow_run_id}")
 async def handle_twilio_status_callback(
     workflow_run_id: int,

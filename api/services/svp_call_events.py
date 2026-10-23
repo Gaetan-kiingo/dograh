@@ -47,6 +47,9 @@ ATTEMPT_DELAYS = (0.0, 1.0, 3.0)
 # it, was lost to a crash (the pipeline's own ceilings are far below this)
 STALE_RUN_AFTER_SECONDS = int(os.getenv("SVP_STALE_RUN_AFTER_SECONDS", "7200") or 7200)
 TEXT_MODES = ("textchat", "chat")
+# the codec of a leg in this runtime, by channel: Twilio's media streams and Asterisk's
+# external media are G.711 mu-law at 8 kHz; the browser negotiates Opus
+CODEC_BY_MODE = {"twilio": "PCMU/8000", "ari": "PCMU/8000", "smallwebrtc": "opus/48000"}
 
 _tasks: set[asyncio.Task] = set()
 # per run, in this process: when media came up, when the first sound went out, the
@@ -139,8 +142,15 @@ async def _run_body(run_id: int) -> dict[str, Any] | None:
         return None
     definition = getattr(workflow_run, "definition", None)
     configurations = (getattr(definition, "workflow_configurations", None) or {}) if definition else {}
-    initial = workflow_run.initial_context or {}
+    initial = getattr(workflow_run, "initial_context", None) or {}
+    gathered = getattr(workflow_run, "gathered_context", None) or {}
+    mode = str(getattr(workflow_run, "mode", "") or "")
     return {
+        # P-35 (TEL-006): the carrier's own call id, the configuration the call came
+        # through and the codec of the leg - fixed by the channel in this runtime
+        "carrier_call_id": gathered.get("call_id"),
+        "telephony_configuration_id": initial.get("telephony_configuration_id"),
+        "codec": CODEC_BY_MODE.get(mode),
         "organization_id": organization_id,
         "workflow_id": workflow_run.workflow_id,
         "run_id": run_id,
@@ -149,7 +159,7 @@ async def _run_body(run_id: int) -> dict[str, Any] | None:
         "publish": configurations.get("svp_publish"),
         "recording_enabled": configurations.get("recording_enabled"),
         "recording_consent": configurations.get("svp_recording_consent"),
-        "mode": workflow_run.mode,
+        "mode": getattr(workflow_run, "mode", None),
         "direction": initial.get("direction"),
         "provider": initial.get("provider"),
         "caller_number": initial.get("caller_number"),

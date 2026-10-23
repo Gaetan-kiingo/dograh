@@ -2,6 +2,7 @@
 Twilio implementation of the TelephonyProvider interface.
 """
 
+import os
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -25,6 +26,10 @@ from api.utils.telephony_address import normalize_telephony_address
 
 if TYPE_CHECKING:
     from fastapi import WebSocket
+
+
+def inbound_status_callback_enabled() -> bool:
+    return os.environ.get("SVP_CARRIER_STATUS", "").strip().lower() in ("on", "1", "true")
 
 
 class TwilioProvider(TelephonyProvider):
@@ -481,6 +486,14 @@ class TwilioProvider(TelephonyProvider):
                 "VoiceUrl": webhook_url,
                 "VoiceMethod": "POST",
             }
+            # P-35 (Swiss Voice Platform, ADR-002 / ADR-053; CALL-015, TEL-006): the number
+            # also reports every call's terminal status - a caller gone while ringing, a
+            # failed call - to a route that finds the run by Twilio's call id, so the call
+            # ends for the platform the moment the carrier says so. Unset = stock.
+            if inbound_status_callback_enabled():
+                base = webhook_url.split("/api/v1/telephony/", 1)[0]
+                data["StatusCallback"] = f"{base}/api/v1/telephony/twilio/status"
+                data["StatusCallbackMethod"] = "POST"
         else:
             # Clearing — Twilio treats empty string as "unset".
             data = {

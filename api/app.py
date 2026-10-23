@@ -138,6 +138,22 @@ else:
     cors_origins = CORS_ALLOWED_ORIGINS
     cors_allow_credentials = True
 
+
+@app.middleware("http")
+async def _svp_trace(request, call_next):
+    """P-36 (CF-062): the platform's trace (W3C traceparent) kept on every log line of the
+    request; a request without one gets nothing."""
+    from api.logging_config import trace_id_var
+
+    header = request.headers.get("traceparent", "")
+    parts = header.split("-")
+    token = trace_id_var.set(parts[1] if len(parts) >= 3 and len(parts[1]) == 32 else "")
+    try:
+        return await call_next(request)
+    finally:
+        trace_id_var.reset(token)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,

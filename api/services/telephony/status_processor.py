@@ -78,6 +78,8 @@ def _append_unique_tags(existing_tags: object, new_tags: list[str]) -> list[str]
 async def _enqueue_integrations_for_unconnected_run(
     workflow_run_id: int,
     status: str,
+    duration: object = None,
+    call_id: str | None = None,
 ) -> None:
     """Fire post-call integrations (e.g. webhooks) when a call ends before the
     Pipecat pipeline ever starts.
@@ -95,7 +97,13 @@ async def _enqueue_integrations_for_unconnected_run(
     try:
         from api.services import svp_call_events
 
-        await svp_call_events.ended_now(workflow_run_id, f"carrier_{status}"[:60])
+        await svp_call_events.ended_now(
+            workflow_run_id,
+            f"carrier_{status}"[:60],
+            carrier_status=status,
+            carrier_duration=duration,
+            carrier_call_id=call_id,
+        )
     except Exception as e:  # noqa: BLE001
         logger.error(f"P-33: could not tell the platform run {workflow_run_id} ended: {e}")
 
@@ -231,7 +239,10 @@ async def _process_status_update(workflow_run_id: int, status: StatusCallbackReq
 
         if should_run_post_call_integrations:
             await _enqueue_integrations_for_unconnected_run(
-                workflow_run_id, normalized_status.value
+                workflow_run_id,
+                normalized_status.value,
+                duration=status.duration,
+                call_id=status.call_id,
             )
     elif normalized_status in IN_FLIGHT_STATUSES:
         # No-op while the call is in flight.
