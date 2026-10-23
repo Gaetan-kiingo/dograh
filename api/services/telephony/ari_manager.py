@@ -26,7 +26,7 @@ from loguru import logger
 
 from api.constants import REDIS_URL
 from api.db import db_client
-from api.enums import CallType, WorkflowRunMode
+from api.enums import CallType, WorkflowRunMode, WorkflowRunState
 from api.errors.failure import (
     DograhFailure,
     ErrorSource,
@@ -1071,6 +1071,30 @@ class ARIConnection:
                 f"caller {caller_channel_id} / ext {ext_channel_id}: {e}"
             )
 
+    async def _finish_abandoned_run(self, workflow_run_id: int) -> None:
+        """P-33 (CALL-015): the run of a phone leg that left before media is completed
+        with the disposition `abandoned_before_media`, and the platform is told."""
+        try:
+            await db_client.update_workflow_run(
+                run_id=workflow_run_id,
+                is_completed=True,
+                state=WorkflowRunState.COMPLETED.value,
+                usage_info={"call_duration_seconds": 0},
+                gathered_context={
+                    "call_disposition": "abandoned_before_media",
+                    "mapped_call_disposition": "abandoned_before_media",
+                },
+            )
+        except Exception as e:  # noqa: BLE001 - teardown goes on
+            logger.error(f"[ARI] run {workflow_run_id} not marked abandoned: {e}")
+            return
+        try:
+            from api.services import svp_call_events
+
+            await svp_call_events.ended_now(workflow_run_id, "abandoned_before_media")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"P-33: could not tell the platform run {workflow_run_id} ended: {e}")
+
     async def _handle_stasis_end(self, channel_id: str, workflow_run_id: str):
         """Full teardown of all ARI resources on any channel's StasisEnd.
 
@@ -1087,6 +1111,14 @@ class ARIConnection:
             await call_concurrency.unregister_active_call(int(workflow_run_id))
 
             workflow_run = await db_client.get_workflow_run_by_id(int(workflow_run_id))
+            # P-33: a leg gone before the pipeline ever ran (the caller hung up during
+            # setup, the media channel failed) leaves a run nobody would finish
+            if (
+                workflow_run
+                and not workflow_run.is_completed
+                and str(workflow_run.state) != WorkflowRunState.RUNNING.value
+            ):
+                await self._finish_abandoned_run(int(workflow_run_id))
             if not workflow_run or not workflow_run.gathered_context:
                 logger.warning(
                     f"[ARI org={self.organization_id}] StasisEnd: no gathered_context "

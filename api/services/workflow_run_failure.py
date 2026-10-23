@@ -56,6 +56,16 @@ async def mark_workflow_run_failed(workflow_run_id: int, error_message: str) -> 
         logger.error(f"Failed to record failure on workflow run {workflow_run_id}: {e}")
         return
 
+    # P-33: a call refused or broken before its pipeline started is a call that ended
+    try:
+        from api.services import svp_call_events
+
+        await svp_call_events.ended_now(
+            workflow_run_id, "failed_before_start", error=str(error_message)[:200]
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"P-33: could not tell the platform run {workflow_run_id} failed: {e}")
+
     try:
         # Imported lazily to avoid loading the ARQ worker/task graph when route
         # modules import this helper.

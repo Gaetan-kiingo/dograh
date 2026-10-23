@@ -632,6 +632,9 @@ async def _run_pipeline_impl(
             os.getenv("RECORDING_DEFAULT", "").strip().lower() != "off"
         )
     recording_enabled = bool(recording_enabled)
+    # P-33 (CF-007): « ask » = the opening asks the caller, recording starts on the yes
+    recording_consent = run_configs.get("svp_recording_consent")
+    recording_consent = str(recording_consent).strip().lower() if recording_consent else None
 
     if run_configs:
         if "max_call_duration" in run_configs:
@@ -1106,6 +1109,7 @@ async def _run_pipeline_impl(
     feedback_observer = RealtimeFeedbackObserver(
         ws_sender=ws_sender,
         logs_buffer=in_memory_logs_buffer,
+        workflow_run_id=workflow_run_id,
     )
     task.add_observer(feedback_observer)
 
@@ -1167,6 +1171,7 @@ async def _run_pipeline_impl(
         integration_runtime_sessions=integration_runtime_sessions,
         include_transcript_end_timestamps=include_transcript_end_timestamps,
         recording_enabled=recording_enabled,
+        recording_consent=recording_consent,
     )
 
     register_audio_data_handler(audio_buffer, workflow_run_id, in_memory_audio_buffer)

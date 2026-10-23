@@ -32,6 +32,7 @@ from api.errors.failure import (
     log_failure,
 )
 from api.services.pipecat import turn_timing
+from api.services import svp_call_events
 from api.services.pipecat.realtime_feedback_events import (
     build_bot_text_event,
     build_function_call_end_event,
@@ -93,6 +94,7 @@ class RealtimeFeedbackObserver(BaseObserver):
         self,
         ws_sender: Callable[[dict], Awaitable[None]],
         logs_buffer: Optional["InMemoryLogsBuffer"] = None,
+        workflow_run_id: Optional[int] = None,
     ):
         """
         Args:
@@ -106,6 +108,8 @@ class RealtimeFeedbackObserver(BaseObserver):
         self._frames_seen: Set[str] = set()
         # P-28 (ADR-002): the marks of a turn's timing kept with the run; off = stock
         self._turn_timing = turn_timing.enabled()
+        # P-33: the run whose first sound and spoken opening the platform is told about
+        self._svp_run_id = workflow_run_id
 
     async def cleanup(self):
         """Clean up resources. Must be called when the observer is no longer needed."""
@@ -155,12 +159,17 @@ class RealtimeFeedbackObserver(BaseObserver):
             )
             if self._turn_timing:
                 await self._append_to_buffer(turn_timing.mark(turn_timing.BOT_STARTED))
+            if self._svp_run_id is not None:
+                svp_call_events.first_sound(self._svp_run_id)
         elif isinstance(frame, BotStoppedSpeakingFrame):
             await self._send_ws(
                 {"type": RealtimeFeedbackType.BOT_STOPPED_SPEAKING.value, "payload": {}}
             )
             if self._turn_timing:
                 await self._append_to_buffer(turn_timing.mark(turn_timing.BOT_STOPPED))
+            if self._svp_run_id is not None:
+                # the first utterance to its end is the opening, disclosure included
+                svp_call_events.opening_spoken(self._svp_run_id)
         # User mute state - WS only (ephemeral state signals, not persisted)
         elif isinstance(frame, UserMuteStartedFrame):
             await self._send_ws(

@@ -91,6 +91,13 @@ async def _enqueue_integrations_for_unconnected_run(
         f"[run {workflow_run_id}] Enqueued post-call integrations after terminal "
         f"telephony status: {status}"
     )
+    # P-33: the platform is told this call ended without ever connecting
+    try:
+        from api.services import svp_call_events
+
+        await svp_call_events.ended_now(workflow_run_id, f"carrier_{status}"[:60])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"P-33: could not tell the platform run {workflow_run_id} ended: {e}")
 
 
 class StatusCallbackRequest(BaseModel):

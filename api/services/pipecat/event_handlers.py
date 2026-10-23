@@ -16,6 +16,7 @@ from api.services.pipecat.pipeline_metrics_aggregator import PipelineMetricsAggr
 from api.services.pipecat.tracing_config import get_trace_url
 from api.services.pipecat.transcript_log_coordinator import TranscriptLogCoordinator
 from api.services.posthog_client import capture_event
+from api.services import svp_call_events
 from api.services.workflow.initial_context import merge_external_initial_context
 from api.services.workflow.pipecat_engine import PipecatEngine
 from api.services.workflow_run_artifacts import upload_workflow_run_artifacts
@@ -76,6 +77,7 @@ def register_event_handlers(
     integration_runtime_sessions: list[IntegrationRuntimeSession] | None = None,
     include_transcript_end_timestamps: bool = False,
     recording_enabled: bool = True,
+    recording_consent: str | None = None,
 ):
     """Register all event handlers for transport and task events.
 
@@ -96,6 +98,17 @@ def register_event_handlers(
         sample_rate=sample_rate,
         num_channels=num_channels,
     )
+    # P-33 (CF-007): recording on the caller's yes - the engine's consent function calls
+    # this; the run's state is told
+    async def _start_recording_on_consent() -> None:
+        if not recording_enabled:
+            return
+        await audio_buffer.start_recording()
+        svp_call_events.recording_started(workflow_run_id, "consent")
+
+    engine._svp_start_recording = _start_recording_on_consent
+    engine._svp_recording_consent = recording_consent if recording_enabled else None
+
     # Track both events to ensure the initial response is only triggered after both occur
     ready_state = {
         "pipeline_started": False,
@@ -173,9 +186,16 @@ def register_event_handlers(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _participant):
         logger.debug("In on_client_connected callback handler")
-        # P-12: record only when the run's policy says so.
-        if recording_enabled:
+        # P-33: the call is answered - media is up both ways - the platform is told
+        svp_call_events.media_connected(workflow_run_id)
+        # P-12: record only when the run's policy says so. P-33 (CF-007): when the
+        # policy asks the caller first, nothing is captured until the caller's yes
+        # (the start node's `recording_consent` function, below).
+        if recording_enabled and recording_consent == "ask":
+            logger.info("Recording waits for the caller's consent (policy); nothing captured yet")
+        elif recording_enabled:
             await audio_buffer.start_recording()
+            svp_call_events.recording_started(workflow_run_id, "answer")
         else:
             logger.info("Recording is off for this run (policy); audio is not captured")
         ready_state["client_connected"] = True
@@ -370,6 +390,9 @@ def register_event_handlers(
         from api.services.configuration.secret_refs import forget_run
 
         forget_run(workflow_run_id)
+        # P-33: the platform told the run ended, with its disposition, before the
+        # artifacts are uploaded (P-20's notice follows them)
+        svp_call_events.ended(workflow_run_id, str(gathered_context.get("call_disposition") or ""))
 
         asyncio.create_task(
             _capture_call_event(

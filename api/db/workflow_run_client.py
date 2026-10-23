@@ -217,6 +217,25 @@ class WorkflowRunClient(BaseDBClient):
             result = await session.execute(query)
             return result.scalars().first()
 
+    async def get_stale_incomplete_voice_runs(
+        self, *, created_before, exclude_modes: tuple[str, ...], limit: int = 200
+    ) -> list[WorkflowRunModel]:
+        """P-33 (CALL-015): voice runs never completed and older than `created_before` -
+        the runs a crash left open. An unscoped background-task query; the task reports
+        each run through its own workflow's organisation."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(WorkflowRunModel)
+                .where(
+                    WorkflowRunModel.is_completed.is_(False),
+                    WorkflowRunModel.created_at < created_before,
+                    WorkflowRunModel.mode.notin_(list(exclude_modes)),
+                )
+                .order_by(WorkflowRunModel.id)
+                .limit(max(1, min(limit, 500)))
+            )
+            return list(result.scalars().all())
+
     async def get_workflow_run_by_id(self, run_id: int) -> WorkflowRunModel | None:
         """Get workflow run by ID without user filtering - for background tasks"""
         async with self.async_session() as session:

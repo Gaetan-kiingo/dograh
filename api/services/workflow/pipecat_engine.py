@@ -24,6 +24,7 @@ from api.errors.failure import (
     log_failure,
 )
 from api.services.pipecat.audio_playback import play_audio
+from api.services import svp_call_events
 from api.services.workflow.workflow_graph import (
     TEMPLATE_VAR_PATTERN,
     Node,
@@ -115,6 +116,11 @@ class PipecatEngine:
         self._initialized = False
         self._call_disposed = False
         self._current_node: Optional[Node] = None
+        # P-33 (CF-007): « ask » = the opening asks whether the call may be recorded and
+        # recording starts on the caller's yes, through the hook the event handlers set
+        self._svp_recording_consent: Optional[str] = None
+        self._svp_start_recording: Optional[Callable[[], Awaitable[None]]] = None
+        self._svp_consent_answered = False
         self._gathered_context: dict = {}
         self._user_response_timeout_task: Optional[asyncio.Task] = None
         self._pending_extraction_tasks: set[asyncio.Task] = set()
@@ -705,7 +711,53 @@ class PipecatEngine:
             custom_tool_manager=self._custom_tool_manager,
         )
         functions = self._hold_transitions_for_write_step(node, functions)
+        functions = self._offer_recording_consent(node, functions)
         await self._update_llm_context(system_prompt, functions)
+
+    def _offer_recording_consent(self, node: Node, functions: list) -> list:
+        """P-33 (CF-007, ADR-052 point 4): when the published policy records only with the
+        caller's consent (`svp_recording_consent: ask`), the opening step carries one
+        function, `recording_consent(granted)`, the model calls with the caller's first
+        answer; the recording starts on `granted: true` (through the hook the event
+        handlers set) and the platform is told. Nothing else changes; a workflow without
+        the key is untouched."""
+        if (
+            self._svp_recording_consent != "ask"
+            or node.id != self.workflow.start_node_id
+            or self._svp_consent_answered
+            or self.llm is None
+        ):
+            return functions
+        from api.services.workflow.pipecat_engine_custom_tools import get_function_schema
+
+        async def consent_func(params: FunctionCallParams) -> None:
+            granted = bool((params.arguments or {}).get("granted"))
+            self._svp_consent_answered = True
+            if granted and self._svp_start_recording is not None:
+                try:
+                    await self._svp_start_recording()
+                except Exception as e:  # noqa: BLE001 - the call goes on unrecorded
+                    logger.warning(f"P-33: recording could not start on consent: {e}")
+            logger.info(f"P-33: recording consent {'given' if granted else 'refused'}")
+            await params.result_callback(
+                {"recording": "started" if granted else "off", "note": "continue the call"}
+            )
+
+        self.llm.register_function("recording_consent", consent_func)
+        schema = get_function_schema(
+            "recording_consent",
+            "Record the caller's answer to the opening's question whether this call may be "
+            "recorded. Call it once, with the caller's first answer, before anything else: "
+            "granted true for a yes, false for a no or a doubt. Then continue the call.",
+            properties={
+                "granted": {
+                    "type": "boolean",
+                    "description": "true if the caller agreed to the recording",
+                }
+            },
+            required=["granted"],
+        )
+        return [*functions, schema]
 
     def _hold_transitions_for_write_step(self, node: Node, functions: list) -> list:
         """P-32 (ADR-002; CF-164): a step with a write tool cannot be left before that
@@ -925,6 +977,10 @@ class PipecatEngine:
                     )
                 elif greeting_value and self.task is not None:
                     logger.debug("Playing text greeting via TTS")
+                    if previous_node_id is None and self._workflow_run_id is not None:
+                        # P-33: the words spoken first - the platform compares their
+                        # fingerprint with the version it published
+                        svp_call_events.opening_queued(self._workflow_run_id, greeting_value)
                     # append_to_context=True so the assistant aggregator commits
                     # the greeting to the LLM context once TTS finishes; without
                     # it the LLM would re-greet on its first generation.

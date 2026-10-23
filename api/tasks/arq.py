@@ -45,6 +45,7 @@ from api.tasks.campaign_tasks import (
 )
 from api.tasks.knowledge_base_processing import process_knowledge_base_document
 from api.tasks.run_integrations import run_integrations_post_workflow_run
+from api.tasks.svp_stale_runs import sweep_stale_voice_runs
 from api.tasks.text_chat_inactivity import (
     complete_inactive_text_chat_session,
     sweep_inactive_text_chat_sessions,
@@ -78,6 +79,14 @@ class WorkerSettings:
             sweep_inactive_text_chat_sessions,
             minute=set(range(0, 60, TEXT_CHAT_INACTIVITY_SWEEP_INTERVAL_MINUTES)),
             second=30,
+            run_at_startup=True,
+        ),
+        # P-33 (CALL-015): voice runs a crash left open are finished as lost and the
+        # platform told; no-op unless SVP_CALL_EVENTS_URL is set.
+        cron(
+            sweep_stale_voice_runs,
+            minute=set(range(2, 60, 5)),
+            second=45,
             run_at_startup=True,
         ),
     ]
