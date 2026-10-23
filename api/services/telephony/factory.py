@@ -325,6 +325,56 @@ def resolve_telephony_secret_references(config: Dict[str, Any]) -> Dict[str, Any
     }
 
 
+# a workspace's carrier credential fetched from the platform is kept a few minutes: every
+# inbound webhook checks a signature with it
+_CARRIER_SECRETS: dict[tuple[int, str], tuple[str, float]] = {}
+CARRIER_SECRET_TTL = 300.0
+
+
+async def resolve_telephony_secret_references_for_org(
+    config: Dict[str, Any], organization_id: int
+) -> Dict[str, Any]:
+    """P-34, bring your own carrier (ADR-053 amendment): a reference the runtime's environment
+    does not hold is asked of the platform's key service for this organisation - the
+    workspace's own carrier credential (`SVP_PROVIDER_TWILIO_<connection>`), never shared
+    between workspaces. A failure fails the call closed."""
+    if not telephony_secret_references_enabled():
+        return config
+    import time
+
+    from api.services.configuration.secret_refs import (
+        SecretReferenceError,
+        _fetch,
+        is_reference,
+        reference_name,
+        resolve_value,
+    )
+
+    out: Dict[str, Any] = {}
+    now = time.monotonic()
+    for key, value in config.items():
+        if not is_reference(value):
+            out[key] = value
+            continue
+        name = reference_name(value)
+        if os.environ.get(name):
+            out[key] = resolve_value(value)
+            continue
+        cached = _CARRIER_SECRETS.get((organization_id, name))
+        if cached and now - cached[1] < CARRIER_SECRET_TTL:
+            out[key] = cached[0]
+            continue
+        try:
+            fetched = await _fetch(
+                [name], organization_id=organization_id, workflow_id=None, run_id=None
+            )
+        except SecretReferenceError:
+            raise
+        out[key] = fetched[name]
+        _CARRIER_SECRETS[(organization_id, name)] = (fetched[name], now)
+    return out
+
+
 async def _normalize_with_phone_numbers(
     row: TelephonyConfigurationModel,
 ) -> Dict[str, Any]:
@@ -346,7 +396,7 @@ async def _normalize_with_phone_numbers(
     # environment here, the one place every reader of a configuration passes through
     # (signature checks, the media transport, the number's VoiceUrl sync). The account
     # SID stays literal: the inbound lookup matches on it. Unset = stock (values as stored).
-    base = resolve_telephony_secret_references(base)
+    base = await resolve_telephony_secret_references_for_org(base, row.organization_id)
 
     addresses = await db_client.list_active_normalized_addresses_for_config(row.id)
     base["from_numbers"] = addresses

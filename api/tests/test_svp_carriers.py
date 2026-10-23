@@ -198,3 +198,38 @@ def test_p36_the_trace_is_kept_on_the_record():
         assert record["extra"]["trace_id"] == "9c74c9ca4fd51155691441f6db7f2109"
     finally:
         lc.trace_id_var.reset(token)
+
+
+# --- P-34, bring your own carrier: the workspace's credential fetched from the platform ---------
+
+
+@pytest.mark.asyncio
+async def test_p34_a_reference_the_environment_lacks_is_asked_of_the_platform_for_the_organisation(monkeypatch):
+    from api.services.configuration import secret_refs
+
+    monkeypatch.setenv("SVP_TELEPHONY_SECRET_REFS", "on")
+    monkeypatch.delenv("SVP_PROVIDER_TWILIO_" + "A" * 32, raising=False)
+    asked: list[dict] = []
+
+    async def fetch(names, *, organization_id, workflow_id, run_id):
+        asked.append({"names": names, "organization_id": organization_id, "run_id": run_id})
+        return {names[0]: "the-tenants-token"}
+
+    monkeypatch.setattr(secret_refs, "_fetch", fetch)
+    factory._CARRIER_SECRETS.clear()
+    name = "secretref:SVP_PROVIDER_TWILIO_" + "A" * 32
+    config = {"provider": "twilio", "account_sid": "AC1", "auth_token": name}
+    resolved = await factory.resolve_telephony_secret_references_for_org(config, 5)
+    assert resolved["auth_token"] == "the-tenants-token" and resolved["account_sid"] == "AC1"
+    assert asked == [{"names": ["SVP_PROVIDER_TWILIO_" + "A" * 32], "organization_id": 5, "run_id": None}]
+    # kept for a while: the next inbound webhook does not ask again
+    await factory.resolve_telephony_secret_references_for_org(config, 5)
+    assert len(asked) == 1
+    # another organisation asks for its own
+    await factory.resolve_telephony_secret_references_for_org(config, 6)
+    assert len(asked) == 2 and asked[1]["organization_id"] == 6
+    # the environment wins when it holds the name (Driing's own account)
+    monkeypatch.setenv("SVP_PROVIDER_TWILIO_" + "A" * 32, "env-token")
+    factory._CARRIER_SECRETS.clear()
+    assert (await factory.resolve_telephony_secret_references_for_org(config, 7))["auth_token"] == "env-token"
+    assert len(asked) == 2
