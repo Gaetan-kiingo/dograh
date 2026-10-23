@@ -107,7 +107,6 @@ def register_event_handlers(
         svp_call_events.recording_started(workflow_run_id, "consent")
 
     engine._svp_start_recording = _start_recording_on_consent
-    engine._svp_recording_consent = recording_consent if recording_enabled else None
 
     # Track both events to ensure the initial response is only triggered after both occur
     ready_state = {

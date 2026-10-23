@@ -1115,6 +1115,11 @@ async def _run_pipeline_impl(
 
     # Initialize the engine to set the initial context with
     # System Prompt and Tools
+    # P-33 (CF-007): the consent mode must be on the engine BEFORE initialize() builds the
+    # opening step's context - the event handlers come later (found on the owner's calls
+    # 1510 and 1511 of 2026-10-23: the function was never offered, the model answered in
+    # words, the yes went unrecorded)
+    engine._svp_recording_consent = recording_consent if recording_enabled else None
     await engine.initialize()
 
     # Register latency observer to log user-to-bot response latency
