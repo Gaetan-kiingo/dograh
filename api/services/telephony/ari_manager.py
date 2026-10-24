@@ -42,6 +42,7 @@ from api.services.call_concurrency import (
 from api.services.organization_preferences import external_pbx_integrations_enabled
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.telephony import ws_auth
+from api.services.telephony.factory import resolve_telephony_secret_references_for_org
 from api.services.telephony.call_transfer_manager import get_call_transfer_manager
 from api.services.telephony.providers.ari.external_pbx import create_adapter
 from api.services.telephony.transfer_event_protocol import (
@@ -1604,6 +1605,32 @@ class ARIManager:
         configs = []
         for row in rows:
             credentials = row.credentials or {}
+            # P-37 (Swiss Voice Platform, ADR-002 / ADR-014; CF-173): the edge's ARI password
+            # is stored by reference like a carrier's token (P-34) and resolved here, the one
+            # place the manager reads it; a reference that cannot be resolved parks nothing
+            # and connects nothing - the row is skipped until the secret exists. Unset =
+            # stock (the values as stored).
+            try:
+                credentials = await resolve_telephony_secret_references_for_org(
+                    credentials, row.organization_id
+                )
+            except Exception as e:  # noqa: BLE001 - the loop must survive one bad row
+                if self._should_log_validation_failure(row.id, "ari-secret-unresolved"):
+                    _log_ari_failure(
+                        DograhFailure(
+                            source=ErrorSource.TELEPHONY,
+                            type=ErrorType.CONFIG_ERROR,
+                            code="ari-secret-unresolved",
+                            internal_message=f"ARI credential reference could not be resolved: {e}",
+                            external_message="The ARI password reference cannot be resolved.",
+                            provider="ari",
+                            error_owner="user",
+                            retryable=True,
+                        ),
+                        organization_id=row.organization_id,
+                        telephony_configuration_id=row.id,
+                    )
+                continue
             ari_endpoint = credentials.get("ari_endpoint")
             app_name = credentials.get("app_name")
             app_password = credentials.get("app_password")
