@@ -16,6 +16,8 @@ moment of a call::
   to the first sound (PERF-002), ``outcome`` played.
 - ``recording_started``: the audio capture began (at the answer when the policy records
   without a question; on the caller's yes when the policy asks first - CF-007).
+- ``language_switched``: the caller spoke another of the agent's languages and the agent
+  switched to it (P-07, ADR-058): ``language``, ``previous_language``.
 - ``ended``: the run is over, on EVERY path: the pipeline finished (the disposition),
   a failure before the pipeline started, a caller gone during the phone leg's setup,
   a carrier's terminal status, a run found abandoned by the sweep after a crash.
@@ -230,6 +232,12 @@ def opening_spoken(run_id: int) -> None:
         text_hash=text_hash(s.get("opening", "")) if s.get("opening") else None,
         first_sound_after_media_seconds=delay,
     )
+
+
+def language_switched(run_id: int, language: str, *, previous: str | None = None) -> None:
+    """P-07 (ADR-058, CALL-005): the caller spoke another of the agent's languages and the
+    agent switched to it. Says `language_switched` with the language heard."""
+    notify("language_switched", run_id, language=language, previous_language=previous)
 
 
 def recording_started(run_id: int, trigger: str) -> None:

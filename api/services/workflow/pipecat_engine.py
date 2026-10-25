@@ -109,6 +109,12 @@ class PipecatEngine:
         self.workflow = workflow
         self._call_context_vars = call_context_vars
         self._workflow_run_id = workflow_run_id
+        # P-07 (ADR-058): the language the caller switched to, if any - its instruction
+        # follows the system prompt of this and every later step; the announcement is
+        # asked once, for the next reply
+        self._svp_caller_language: str | None = None
+        self._svp_language_instruction: str = ""
+        self._svp_language_announce: str = ""
         self._node_transition_callback = node_transition_callback
         self._run_transition_variable_extraction_in_background = (
             run_transition_variable_extraction_in_background
@@ -263,6 +269,48 @@ class PipecatEngine:
 
         await self.llm._update_settings(LLMSettings(system_instruction=system_prompt))
 
+    # --- P-07 (ADR-058): the caller's language ------------------------------------------
+
+    def _svp_with_language(self, system_prompt: str) -> str:
+        """The step's instructions, followed by the caller's language when one was
+        heard: it holds on this step and every later one until the caller changes again."""
+        if not self._svp_caller_language:
+            return system_prompt
+        lines = [
+            "[CALLER LANGUAGE]",
+            f"The caller speaks {self._svp_caller_language}. {self._svp_language_instruction} "
+            "Answer in that language from now on, whatever language these instructions are "
+            "written in; keep every fact, rule and sentence meaning as written.",
+        ]
+        if self._svp_language_announce:
+            lines.append(
+                "Open your very next reply with exactly this sentence, once, then go on: "
+                f"« {self._svp_language_announce} »."
+            )
+        return system_prompt + "\n\n" + "\n".join(lines)
+
+    async def set_caller_language(self, code: str, *, instruction: str, announce: str) -> None:
+        """The switch (P-07): remembered for every later step, applied to the current one
+        now; the announcement is asked for the next reply only."""
+        self._svp_caller_language = code
+        self._svp_language_instruction = instruction
+        self._svp_language_announce = announce
+        node = self._current_node
+        if node is None or self.llm is None:
+            return
+        system_prompt = self._svp_with_language(
+            compose_system_prompt_for_node(
+                node=node,
+                workflow=self.workflow,
+                format_prompt=self._format_prompt,
+                has_recordings=self._has_recordings,
+            )
+        )
+        await self.llm._update_settings(LLMSettings(system_instruction=system_prompt))
+        # the announcement is said once: the next render carries the language only
+        self._svp_language_announce = ""
+        logger.info(f"P-07: instructions of node {node.name} now answer in {code}")
+
     def _format_prompt(self, prompt: str) -> str:
         """Delegate prompt formatting to the shared workflow.utils implementation."""
 
@@ -296,11 +344,13 @@ class PipecatEngine:
         }
         if not used & keys:
             return
-        system_prompt = compose_system_prompt_for_node(
-            node=node,
-            workflow=self.workflow,
-            format_prompt=self._format_prompt,
-            has_recordings=self._has_recordings,
+        system_prompt = self._svp_with_language(
+            compose_system_prompt_for_node(
+                node=node,
+                workflow=self.workflow,
+                format_prompt=self._format_prompt,
+                has_recordings=self._has_recordings,
+            )
         )
         await self.llm._update_settings(LLMSettings(system_instruction=system_prompt))
         logger.debug(
@@ -700,11 +750,13 @@ class PipecatEngine:
             await self._register_knowledge_base_function(node.document_uuids)
 
         # Compose prompt and functions via the context composer module
-        system_prompt = compose_system_prompt_for_node(
-            node=node,
-            workflow=self.workflow,
-            format_prompt=self._format_prompt,
-            has_recordings=self._has_recordings,
+        system_prompt = self._svp_with_language(
+            compose_system_prompt_for_node(
+                node=node,
+                workflow=self.workflow,
+                format_prompt=self._format_prompt,
+                has_recordings=self._has_recordings,
+            )
         )
         functions = await compose_functions_for_node(
             node=node,

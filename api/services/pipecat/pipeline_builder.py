@@ -37,6 +37,7 @@ def build_pipeline(
     pipeline_metrics_aggregator,
     voicemail_detector=None,
     recording_router=None,
+    language_switch=None,
 ):
     """Build the main pipeline with all components.
 
@@ -65,6 +66,12 @@ def build_pipeline(
     if voicemail_detector:
         logger.info("Adding native voicemail detector to pipeline")
         processors.append(voicemail_detector.detector())
+
+    # P-07 (Swiss Voice Platform, ADR-058): the caller's language heard on the final
+    # transcripts, the agent switched - right after the recogniser
+    if language_switch is not None:
+        logger.info("P-07: adding the language switch to the pipeline")
+        processors.append(language_switch)
 
     # Continue with the rest of the pipeline
     post_llm = [pipeline_engine_callback_processor]

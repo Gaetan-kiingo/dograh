@@ -533,12 +533,17 @@ def create_stt_service(
             pipecat_language = PipecatLanguage(language_code)
         except ValueError:
             pipecat_language = language_code
+        # P-07 (ADR-058): the locales the agent answers in; two or more switch on Azure's
+        # continuous language identification (stock recognition otherwise)
+        languages = getattr(user_config.stt, "languages", None) or None
         azure_stt = AzureSTTService(
             api_key=user_config.stt.api_key,
             region=region,
-            settings=AzureSTTSettings(language=pipecat_language),
+            settings=AzureSTTSettings(language=pipecat_language, languages=languages),
             sample_rate=audio_config.transport_in_sample_rate,
         )
+        if languages:
+            logger.info(f"P-07: Azure STT identifies the language among {languages}")
         # P-06 (latency tuning): optionally shorten Azure's end-of-utterance
         # segmentation silence so final transcripts arrive sooner. Unset means
         # Azure's default (~500ms) and stock behavior.

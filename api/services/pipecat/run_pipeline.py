@@ -1070,6 +1070,21 @@ async def _run_pipeline_impl(
             voicemail_detector=voicemail_detector,
         )
     else:
+        # P-07 (ADR-058): the language switch when the agent answers in several languages
+        language_switch = None
+        from api.services.pipecat import language_switch as svp_language_switch
+
+        svp_languages = svp_language_switch.languages_of(run_configs)
+        if svp_language_switch.enabled() and svp_languages:
+            current = svp_language_switch.language_code(
+                getattr(user_config.stt, "language", None)
+            ) or next(iter(svp_languages))
+            language_switch = svp_language_switch.LanguageSwitchProcessor(
+                languages=svp_languages,
+                current=current,
+                engine=engine,
+                run_id=workflow_run_id,
+            )
         pipeline = build_pipeline(
             transport,
             stt,
@@ -1082,6 +1097,7 @@ async def _run_pipeline_impl(
             pipeline_metrics_aggregator,
             voicemail_detector=voicemail_detector,
             recording_router=recording_router,
+            language_switch=language_switch,
         )
 
     # Create pipeline task with audio configuration

@@ -1821,6 +1821,13 @@ class AzureSpeechSTTConfiguration(BaseSTTConfiguration):
             "allow_custom_input": True,
         },
     )
+    # P-07 (Swiss Voice Platform, ADR-058): the locales the recogniser may hear - two or
+    # more switch on Azure's continuous language identification; the platform writes them
+    # when an agent answers in more than one language
+    languages: list[str] | None = Field(
+        default=None,
+        description="BCP-47 locales for continuous language identification (two or more).",
+    )
 
 
 SMALLEST_STT_MODELS = ["pulse"]
