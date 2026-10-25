@@ -929,11 +929,16 @@ class CustomToolManager:
                 call_sid = transfer_result.get("call_sid")
                 logger.info(f"Transfer call initiated successfully: {call_sid}")
                 if svp_handoff.enabled():
+                    svp_dial_after = round(time.monotonic() - svp_commit_at, 3)
+                    logger.info(
+                        f"P-40: handoff dial began {svp_dial_after} s after the sentence "
+                        f"(mode={config.get('svp_mode') or 'announced'})"
+                    )
                     svp_call_events.transfer_started(
                         self._engine._workflow_run_id,
                         destination=str(config.get("svp_destination_name") or ""),
                         mode=str(config.get("svp_mode") or "announced"),
-                        commit_to_dial_seconds=round(time.monotonic() - svp_commit_at, 3),
+                        commit_to_dial_seconds=svp_dial_after,
                     )
 
                 # Update transfer context with actual call_sid from provider response
