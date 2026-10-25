@@ -25,9 +25,13 @@ LANGUAGES = {
 class _Engine:
     def __init__(self):
         self.calls: list[tuple] = []
+        self.cleared = 0
 
     async def set_caller_language(self, code, *, instruction, announce):
         self.calls.append((code, instruction, announce))
+
+    async def clear_language_announcement(self):
+        self.cleared += 1
 
 
 def _processor(engine=None):
@@ -76,11 +80,17 @@ async def test_p07_a_final_transcript_in_another_admitted_language_switches_once
         notify.assert_called_once_with("language_switched", 77, language="de", previous_language="fr")
         # the transcript itself went on downstream, after the switch
         assert isinstance(pushed[-1][0], TranscriptionFrame)
-        # German again: nothing more; French again: the switch back
+        # German again: nothing more - except that the announcement, said in the reply
+        # after the switch, leaves the instructions from this utterance on (run 1674)
+        assert engine.cleared == 0
         await proc.process_frame(
             TranscriptionFrame("Um zehn Uhr.", "u", "t", language="de-DE"), FrameDirection.DOWNSTREAM
         )  # fmt: skip
-        assert proc.switches == ["de"] and notify.call_count == 1
+        assert proc.switches == ["de"] and notify.call_count == 1 and engine.cleared == 1
+        await proc.process_frame(
+            TranscriptionFrame("Danke.", "u", "t", language="de-DE"), FrameDirection.DOWNSTREAM
+        )  # fmt: skip
+        assert engine.cleared == 1  # once
         await proc.process_frame(
             TranscriptionFrame("Merci, en français alors.", "u", "t", language="fr-CH"),
             FrameDirection.DOWNSTREAM,
@@ -140,3 +150,5 @@ def test_p07_the_engine_appends_the_callers_language_to_every_step_prompt():
     assert "The caller speaks de. Antworte auf Deutsch." in text
     assert "Open your very next reply with exactly this sentence, once" in text
     assert "Ich antworte Ihnen gern auf Deutsch." in text
+    engine._svp_language_announce = ""
+    assert "Open your very next reply" not in engine._svp_with_language("[ROLE] x")

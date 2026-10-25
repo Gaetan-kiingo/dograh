@@ -307,9 +307,27 @@ class PipecatEngine:
             )
         )
         await self.llm._update_settings(LLMSettings(system_instruction=system_prompt))
-        # the announcement is said once: the next render carries the language only
-        self._svp_language_announce = ""
         logger.info(f"P-07: instructions of node {node.name} now answer in {code}")
+
+    async def clear_language_announcement(self) -> None:
+        """P-07: the announcement was said in the reply after the switch - from the
+        caller's next utterance on, the instructions carry the language only (found on
+        the first German call of 2026-10-25, run 1674: the sentence opened every reply)."""
+        if not self._svp_language_announce:
+            return
+        self._svp_language_announce = ""
+        node = self._current_node
+        if node is None or self.llm is None:
+            return
+        system_prompt = self._svp_with_language(
+            compose_system_prompt_for_node(
+                node=node,
+                workflow=self.workflow,
+                format_prompt=self._format_prompt,
+                has_recordings=self._has_recordings,
+            )
+        )
+        await self.llm._update_settings(LLMSettings(system_instruction=system_prompt))
 
     def _format_prompt(self, prompt: str) -> str:
         """Delegate prompt formatting to the shared workflow.utils implementation."""

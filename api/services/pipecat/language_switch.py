@@ -72,6 +72,7 @@ class LanguageSwitchProcessor(FrameProcessor):
         self._engine = engine
         self._run_id = run_id
         self.switches: list[str] = []
+        self._announce_pending = False
 
     @property
     def current(self) -> str:
@@ -83,6 +84,11 @@ class LanguageSwitchProcessor(FrameProcessor):
             heard = language_code(str(frame.language) if frame.language else None)
             if heard and heard != self._current and heard in self._languages and frame.text.strip():
                 await self._switch_to(heard)
+            elif self._announce_pending and frame.text.strip() and self._engine is not None:
+                # the reply after the switch carried the announcement; from this utterance
+                # on the instructions say the language only
+                self._announce_pending = False
+                await self._engine.clear_language_announcement()
         await self.push_frame(frame, direction)
 
     async def _switch_to(self, code: str) -> None:
@@ -90,6 +96,7 @@ class LanguageSwitchProcessor(FrameProcessor):
         previous = self._current
         self._current = code
         self.switches.append(code)
+        self._announce_pending = True
         logger.info(f"P-07: the caller speaks {code} (was {previous}); run {self._run_id}")
         # the voice of that language, from the next sentence on
         await self.push_frame(
