@@ -89,6 +89,21 @@ def test_digits_mode_leaves_everything_else(text):
     assert dg.said_digit_by_digit(text) == text
 
 
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Votre référence R-1044 est notée.", "Votre référence R, 1, 0, 4, 4 est notée."),
+        ("Le dossier AN-00132.", "Le dossier A, N, 0, 0, 1, 3, 2."),
+        ("Le devis DEV-2026-147 est ouvert.", "Le devis D, E, V, 2, 0, 2, 6. 1, 4, 7 est ouvert."),
+        ("Ouvert de 9-12 heures, le COVID-19 est passé.", "Ouvert de 9-12 heures, le COVID-19 est passé."),
+        ("La salle B-2 et l'étage A-10.", "La salle B-2 et l'étage A, 1, 0."),
+    ],
+)
+def test_digits_mode_says_a_lettered_reference_letter_and_digit_by_digit(text, expected):
+    # CF-116 (D6b, ADR-059 decision 5): « R-1044 » was read « R moins mille quarante-quatre »
+    assert dg.said_digit_by_digit(text) == expected
+
+
 def test_digits_mode_is_chosen_by_the_setting(monkeypatch):
     monkeypatch.setenv("SVP_TTS_DIGIT_GROUPS", "digits")
     (only,) = dg.svp_text_filters()

@@ -19,6 +19,9 @@ from pipecat.utils.text.base_text_filter import BaseTextFilter
 
 _DASH = r"[  ]?[-‐‑‒–][  ]?"
 _CHAIN = re.compile(rf"(?<!\d)\d+(?:{_DASH}\d+){{2,}}(?!\d)")
+# CF-116 (D6b, ADR-059 decision 5): a reference of one to three letters and digits joined
+# by a dash (« R-1044 », « AN-00132 ») - the voices read « R moins mille quarante-quatre »
+_LETTERED = re.compile(rf"(?<![\w-])([A-Z]{{1,3}}){_DASH}(\d{{2,}}(?:{_DASH}\d+)*)(?![\w-])")
 
 
 def said_as_groups(text: str) -> str:
@@ -27,7 +30,8 @@ def said_as_groups(text: str) -> str:
 
 
 def said_digit_by_digit(text: str) -> str:
-    """« Le devis 2026-02-147. » -> « Le devis 2, 0, 2, 6. 0, 2. 1, 4, 7. »"""
+    """« Le devis 2026-02-147. » -> « Le devis 2, 0, 2, 6. 0, 2. 1, 4, 7. »;
+    « R-1044 » -> « R, 1, 0, 4, 4 » (CF-116, D6b)."""
 
     def spell(chain: re.Match) -> str:
         groups = re.split(_DASH, chain.group(0))
@@ -35,7 +39,12 @@ def said_digit_by_digit(text: str) -> str:
             return ", ".join(groups)
         return ". ".join(", ".join(g) for g in groups)
 
-    return _CHAIN.sub(spell, text)
+    def spell_lettered(ref: re.Match) -> str:
+        letters = ", ".join(ref.group(1))
+        digits = ". ".join(", ".join(g) for g in re.split(_DASH, ref.group(2)))
+        return f"{letters}, {digits}"
+
+    return _CHAIN.sub(spell, _LETTERED.sub(spell_lettered, text))
 
 
 class DigitGroupsTextFilter(BaseTextFilter):
