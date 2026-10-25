@@ -23,6 +23,7 @@ from pipecat.utils.enums import EndTaskReason
 from api.db import db_client
 from api.enums import ToolCategory, WorkflowRunMode
 from api.services.pipecat.audio_playback import play_audio, play_audio_loop
+from api.services.pipecat import handoff as svp_handoff
 from api.services.telephony.call_transfer_manager import get_call_transfer_manager
 from api.services.telephony.external_pbx import resolve_external_pbx_field_mappings
 from api.services.telephony.factory import get_telephony_provider_for_run
@@ -32,6 +33,7 @@ from api.services.workflow.tools.custom_tool import (
     execute_http_tool,
     tool_to_function_schema,
 )
+from api.services import svp_call_events
 from api.services.workflow.tools.transfer_resolver import (
     TransferResolutionError,
     resolve_transfer_config,
@@ -114,6 +116,9 @@ class CustomToolManager:
         # P-32 (ADR-002): function name -> the tool is a write (`svp_kind: write` in its
         # definition's config, set by the platform from the tool's contract)
         self.svp_write_functions: dict[str, bool] = {}
+        # P-40 (ADR-060): the transfer tool's config while a handoff is under way, so the
+        # result handler can tell the platform the destination's name
+        self._svp_transfer_config: dict = {}
 
     async def _play_config_message(
         self, config: dict, *, append_to_context: bool = False
@@ -646,6 +651,7 @@ class CustomToolManager:
                 config = tool.definition.get("config", {})
                 destination = config.get("destination", "")
                 timeout_seconds = config.get("timeout", 30)
+                self._svp_transfer_config = config if isinstance(config, dict) else {}
 
                 # Check if this is a WebRTC call - transfers are not supported
                 workflow_run = await db_client.get_workflow_run_by_id(
@@ -839,6 +845,16 @@ class CustomToolManager:
                             )
                         return
 
+                # P-40 part 3 (ADR-060 decision 7): the pre-transfer sentence is heard to its
+                # end before the destination is dialled - stock dials at once and the hold
+                # music plays over the sentence. The commit (PERF-010) is the sentence's end.
+                if message_queued and svp_handoff.enabled():
+                    await self._engine.wait_for_speech_playback(
+                        start_timeout=_TRANSFER_PLAYBACK_START_TIMEOUT_SECS,
+                        playback_timeout=_TRANSFER_PLAYBACK_FINISH_TIMEOUT_SECS,
+                    )
+                svp_commit_at = time.monotonic()
+
                 if not provider.supports_transfers() or not provider.validate_config():
                     validation_error_result = {
                         "status": "failed",
@@ -892,6 +908,8 @@ class CustomToolManager:
                         transfer_id=transfer_id,
                         conference_name=conference_name,
                         timeout=timeout_seconds,
+                        # P-40 part 2: announced or blind, the edge's dial string
+                        svp_mode=config.get("svp_mode"),
                     )
                 except Exception as e:
                     logger.error(f"Transfer provider failed: {e}")
@@ -910,6 +928,13 @@ class CustomToolManager:
 
                 call_sid = transfer_result.get("call_sid")
                 logger.info(f"Transfer call initiated successfully: {call_sid}")
+                if svp_handoff.enabled():
+                    svp_call_events.transfer_started(
+                        self._engine._workflow_run_id,
+                        destination=str(config.get("svp_destination_name") or ""),
+                        mode=str(config.get("svp_mode") or "announced"),
+                        commit_to_dial_seconds=round(time.monotonic() - svp_commit_at, 3),
+                    )
 
                 # Update transfer context with actual call_sid from provider response
                 transfer_context.call_sid = call_sid
@@ -1028,8 +1053,13 @@ class CustomToolManager:
 
         logger.info(f"Handling transfer result: action={action}, status={status}")
 
+        svp_destination = str(self._svp_transfer_config.get("svp_destination_name") or "")
         if action == "destination_answered":
             # Transfer destination answered - proceeding with bridge swap/conference join
+            if svp_handoff.enabled():
+                svp_call_events.transferred(
+                    self._engine._workflow_run_id, destination=svp_destination
+                )
             conference_id = result.get("conference_id")
             original_call_sid = result.get("original_call_sid")
             transfer_call_sid = result.get("transfer_call_sid")
@@ -1059,6 +1089,12 @@ class CustomToolManager:
             # Transfer failed - let LLM inform user with error details
             reason = result.get("reason", "unknown")
             logger.info(f"Transfer failed ({reason}), informing user via LLM")
+            if svp_handoff.enabled():
+                svp_call_events.transfer_failed(
+                    self._engine._workflow_run_id,
+                    destination=svp_destination,
+                    reason=svp_handoff.failure_code(reason, result.get("message")),
+                )
 
             await function_call_params.result_callback(
                 {

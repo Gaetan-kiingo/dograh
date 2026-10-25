@@ -38,6 +38,7 @@ def build_pipeline(
     voicemail_detector=None,
     recording_router=None,
     language_switch=None,
+    handoff_keypad=None,
 ):
     """Build the main pipeline with all components.
 
@@ -72,6 +73,11 @@ def build_pipeline(
     if language_switch is not None:
         logger.info("P-07: adding the language switch to the pipeline")
         processors.append(language_switch)
+
+    # P-40 (Swiss Voice Platform, ADR-060): the keypad digit that asks for a person
+    if handoff_keypad is not None:
+        logger.info("P-40: adding the handoff keypad shortcut to the pipeline")
+        processors.append(handoff_keypad)
 
     # Continue with the rest of the pipeline
     post_llm = [pipeline_engine_callback_processor]

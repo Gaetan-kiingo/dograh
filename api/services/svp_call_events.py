@@ -18,6 +18,10 @@ moment of a call::
   without a question; on the caller's yes when the policy asks first - CF-007).
 - ``language_switched``: the caller spoke another of the agent's languages and the agent
   switched to it (P-07, ADR-058): ``language``, ``previous_language``.
+- ``transfer_started`` / ``transferred`` / ``transfer_failed`` (P-40, ADR-060): the handoff
+  to a person - the destination's name (the business's word, never a number), the mode,
+  the seconds from the end of the pre-transfer sentence to the dial; the destination
+  answered; or why it did not.
 - ``ended``: the run is over, on EVERY path: the pipeline finished (the disposition),
   a failure before the pipeline started, a caller gone during the phone leg's setup,
   a carrier's terminal status, a run found abandoned by the sweep after a crash.
@@ -238,6 +242,31 @@ def language_switched(run_id: int, language: str, *, previous: str | None = None
     """P-07 (ADR-058, CALL-005): the caller spoke another of the agent's languages and the
     agent switched to it. Says `language_switched` with the language heard."""
     notify("language_switched", run_id, language=language, previous_language=previous)
+
+
+def transfer_started(
+    run_id: int, *, destination: str, mode: str, commit_to_dial_seconds: float | None
+) -> None:
+    """P-40 (ADR-060, PERF-010): the destination is being dialled."""
+    notify(
+        "transfer_started",
+        run_id,
+        destination=str(destination or "")[:64],
+        mode=str(mode or "")[:12],
+        commit_to_dial_seconds=commit_to_dial_seconds,
+    )
+
+
+def transferred(run_id: int, *, destination: str) -> None:
+    """P-40 (ADR-060, TEL-008): the destination answered, the caller is with a person."""
+    notify("transferred", run_id, destination=str(destination or "")[:64])
+
+
+def transfer_failed(run_id: int, *, destination: str, reason: str) -> None:
+    """P-40 (ADR-060, TEL-010): the handoff did not happen; the agent goes on."""
+    notify(
+        "transfer_failed", run_id, destination=str(destination or "")[:64], reason=str(reason or "")[:40]
+    )
 
 
 def recording_started(run_id: int, trigger: str) -> None:

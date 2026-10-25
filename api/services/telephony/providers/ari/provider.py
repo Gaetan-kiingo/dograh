@@ -473,11 +473,11 @@ class ARIProvider(TelephonyProvider):
         # Get call transfer manager for event correlation mapping
         call_transfer_manager = await get_call_transfer_manager()
 
-        # Build SIP endpoint
-        if destination.startswith("SIP/") or destination.startswith("PJSIP/"):
-            sip_endpoint = destination
-        else:
-            sip_endpoint = f"PJSIP/{destination}"
+        # Build SIP endpoint - P-40 (Swiss Voice Platform, ADR-060): the edge decides how
+        # a platform's E.164 destination is dialled (SVP_ARI_TRANSFER_DIAL), announced or blind
+        from api.services.pipecat.handoff import svp_dial_string
+
+        sip_endpoint = svp_dial_string(destination, kwargs.get("svp_mode"))
 
         # Build transfer appArgs for event correlation
         app_args = f"transfer,{transfer_id}"

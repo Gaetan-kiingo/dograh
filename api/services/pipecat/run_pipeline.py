@@ -1085,6 +1085,17 @@ async def _run_pipeline_impl(
                 engine=engine,
                 run_id=workflow_run_id,
             )
+        # P-40 (ADR-060): the keypad shortcut to a person, when the agent has a handoff
+        handoff_keypad = None
+        from api.services.pipecat import handoff as svp_handoff
+
+        svp_handoff_cfg = svp_handoff.handoff_of(run_configs)
+        if svp_handoff.enabled() and svp_handoff_cfg and svp_handoff_cfg["dtmf"]:
+            handoff_keypad = svp_handoff.HandoffKeypadProcessor(
+                digit=svp_handoff_cfg["dtmf"],
+                tool=svp_handoff_cfg["tool"],
+                run_id=workflow_run_id,
+            )
         pipeline = build_pipeline(
             transport,
             stt,
@@ -1098,6 +1109,7 @@ async def _run_pipeline_impl(
             voicemail_detector=voicemail_detector,
             recording_router=recording_router,
             language_switch=language_switch,
+            handoff_keypad=handoff_keypad,
         )
 
     # Create pipeline task with audio configuration

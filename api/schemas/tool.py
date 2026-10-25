@@ -415,6 +415,14 @@ class TransferCallConfig(BaseModel):
         default=None,
         description="Optional ordered context-to-destination routing rules.",
     )
+    # P-40 (Swiss Voice Platform, ADR-060): how the edge dials the destination and the name
+    # the platform is told - the model never sees the number
+    svp_mode: Literal["announced", "blind"] | None = Field(
+        default=None, description="Announced (the person hears a notice first) or blind."
+    )
+    svp_destination_name: str | None = Field(
+        default=None, max_length=64, description="The destination's name for the call's record."
+    )
 
     @model_validator(mode="after")
     def validate_destination_source_config(self):
