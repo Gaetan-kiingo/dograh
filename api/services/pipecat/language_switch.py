@@ -24,6 +24,13 @@ short utterance in the wrong language too often (« Oui » heard as the English 
 (« Do you speak English? »). Every decision is logged with the word count and the tag,
 never the words. Unset = no floor, P-07 as first built.
 
+``SVP_LANGUAGE_SWITCH_CHECK_TEXT=on`` (the same amendment, the owner's call of 01:49): the
+recogniser's tag alone is not trusted - Cartesia's Ink 2 tagged « Oui, bonjour, je souhaite
+prendre rendez-vous pour une coiffure. » English. The transcript's own words are counted
+against a short table of function words per language (``STOP_WORDS``) and the switch is
+made only when the words say the same language as the tag; a transcript whose words decide
+nothing is held. Unset = the tag is trusted (stock P-07).
+
 Unset, or no ``svp_languages``: nothing is added to the pipeline - stock behaviour."""
 
 from __future__ import annotations
@@ -41,6 +48,42 @@ if TYPE_CHECKING:
 
 def enabled() -> bool:
     return os.environ.get("SVP_LANGUAGE_SWITCH", "").strip().lower() in ("on", "1", "true")
+
+
+def check_text() -> bool:
+    return os.environ.get("SVP_LANGUAGE_SWITCH_CHECK_TEXT", "").strip().lower() in ("on", "1", "true")
+
+
+# Function words and language names that seldom cross languages (no « non », « un », « la »,
+# « il », « a », which French, Italian and German share); lower-case, apostrophes kept.
+STOP_WORDS: dict[str, frozenset[str]] = {
+    "fr": frozenset("""je vous nous oui bonjour bonsoir merci est pour une les des du et pas ne ce
+        c'est j'ai avec mon ma mes votre vos s'il plaît rendez-vous voudrais souhaite aimerais
+        français anglais allemand italien parlez est-ce qu'il""".split()),
+    "de": frozenset("""ich sie wir ja nein bitte danke nicht und ist ein eine einen der die das mit
+        für auf termin möchte hätte gerne gern deutsch englisch französisch guten hallo grüezi
+        sprechen können""".split()),
+    "it": frozenset("""io lei noi sì grazie prego per una uno gli che con sono vorrei buongiorno
+        buonasera appuntamento italiano inglese francese tedesco parla posso""".split()),
+    "en": frozenset("""i you we yes please thank thanks hello the is are do can with for and not
+        would like want appointment english french german italian speak my your this""".split()),
+}
+
+
+def text_language(text: str, candidates: "set[str] | frozenset[str]") -> str | None:
+    """The language the transcript's own words say, among the candidates: the one with the
+    most function-word hits, two at least and strictly ahead of the next - else None."""
+    tokens = [t.strip(".,;:!?¿¡«»\"()") for t in text.lower().split()]
+    scores = {
+        code: sum(1 for t in tokens if t in STOP_WORDS.get(code, frozenset()))
+        for code in candidates
+    }
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    if not ranked or ranked[0][1] < 2:
+        return None
+    if len(ranked) > 1 and ranked[1][1] >= ranked[0][1]:
+        return None
+    return ranked[0][0]
 
 
 def min_words() -> int:
@@ -100,14 +143,25 @@ class LanguageSwitchProcessor(FrameProcessor):
             words = len(frame.text.split())
             if heard and heard != self._current and heard in self._languages and words:
                 floor = min_words()
+                said = (
+                    text_language(frame.text, set(self._languages) | {self._current})
+                    if check_text()
+                    else heard
+                )
                 if words < floor:
                     logger.info(
                         f"P-07: a {words}-word transcript tagged {heard} held (floor {floor} words); "
                         f"run {self._run_id}"
                     )
+                elif said != heard:
+                    logger.info(
+                        f"P-07: a {words}-word transcript tagged {heard} held - its words say "
+                        f"{said or 'nothing'}; run {self._run_id}"
+                    )
                 else:
                     logger.info(
-                        f"P-07: a {words}-word transcript tagged {heard} switches; run {self._run_id}"
+                        f"P-07: a {words}-word transcript tagged {heard}, its words agree: "
+                        f"switches; run {self._run_id}"
                     )
                     await self._switch_to(heard)
             elif self._announce_pending and frame.text.strip() and self._engine is not None:

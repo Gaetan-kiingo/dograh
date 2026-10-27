@@ -128,6 +128,47 @@ async def test_p07_a_transcript_under_the_word_floor_never_switches(monkeypatch)
     assert language_switch.min_words() == 0
 
 
+def test_p07_the_words_of_a_transcript_say_their_language():
+    """The owner's call of 2026-10-27 01:49 (run 51): a French sentence tagged en by Cartesia."""
+    fr_sentence = "Oui, bonjour, je souhaite prendre rendez-vous pour une coiffure."
+    assert language_switch.text_language(fr_sentence, {"fr", "en", "de"}) == "fr"
+    assert language_switch.text_language("Do you speak English, please?", {"fr", "en", "de"}) == "en"
+    assert language_switch.text_language("Ich möchte bitte einen Termin.", {"fr", "en", "de"}) == "de"
+    assert language_switch.text_language("Sprechen Sie Deutsch?", {"fr", "en", "de"}) == "de"
+    # nothing decided: too few hits, or a tie
+    assert language_switch.text_language("Termin morgen", {"fr", "de"}) is None
+    assert language_switch.text_language("je ich", {"fr", "de"}) is None
+
+
+@pytest.mark.asyncio
+async def test_p07_a_mis_tagged_transcript_is_held_when_its_words_disagree(monkeypatch):
+    """ADR-058 amendment of 2026-10-27, second finding (run 51): with
+    SVP_LANGUAGE_SWITCH_CHECK_TEXT=on the switch needs the words to agree with the tag."""
+    monkeypatch.setenv("SVP_LANGUAGE_SWITCH_CHECK_TEXT", "on")
+    monkeypatch.setenv("SVP_LANGUAGE_SWITCH_MIN_WORDS", "4")
+    engine = _Engine()
+    proc, pushed = _processor(engine)
+    with patch("api.services.svp_call_events.notify") as notify:
+        # a French sentence tagged German: held
+        await proc.process_frame(
+            TranscriptionFrame("Oui, bonjour, je souhaite prendre rendez-vous pour une coiffure.", "u", "t", language="de-DE"),
+            FrameDirection.DOWNSTREAM,
+        )  # fmt: skip
+        assert proc.current == "fr" and proc.switches == [] and engine.calls == []
+        # a sentence whose words decide nothing: held
+        await proc.process_frame(
+            TranscriptionFrame("Termin morgen zehn Uhr", "u", "t", language="de-DE"), FrameDirection.DOWNSTREAM
+        )  # fmt: skip
+        assert proc.switches == []
+        # a German sentence tagged German: switches
+        await proc.process_frame(
+            TranscriptionFrame("Ich möchte bitte einen Termin.", "u", "t", language="de-DE"), FrameDirection.DOWNSTREAM
+        )  # fmt: skip
+        assert proc.current == "de" and proc.switches == ["de"]
+        notify.assert_called_once_with("language_switched", 77, language="de", previous_language="fr")
+        assert sum(isinstance(f, TranscriptionFrame) for f, _ in pushed) == 3
+
+
 async def test_p07_a_language_the_agent_does_not_answer_in_is_left_alone():
     engine = _Engine()
     proc, pushed = _processor(engine)
