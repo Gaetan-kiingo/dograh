@@ -142,8 +142,8 @@ def test_p07_the_words_of_a_transcript_say_their_language():
 
 @pytest.mark.asyncio
 async def test_p07_a_mis_tagged_transcript_is_held_when_its_words_disagree(monkeypatch):
-    """ADR-058 amendment of 2026-10-27, second finding (run 51): with
-    SVP_LANGUAGE_SWITCH_CHECK_TEXT=on the switch needs the words to agree with the tag."""
+    """ADR-058 amendment of 2026-10-27, second and third findings (runs 51 and 52): with
+    SVP_LANGUAGE_SWITCH_CHECK_TEXT=on the words decide, the tag is only logged."""
     monkeypatch.setenv("SVP_LANGUAGE_SWITCH_CHECK_TEXT", "on")
     monkeypatch.setenv("SVP_LANGUAGE_SWITCH_MIN_WORDS", "4")
     engine = _Engine()
@@ -160,13 +160,19 @@ async def test_p07_a_mis_tagged_transcript_is_held_when_its_words_disagree(monke
             TranscriptionFrame("Termin morgen zehn Uhr", "u", "t", language="de-DE"), FrameDirection.DOWNSTREAM
         )  # fmt: skip
         assert proc.switches == []
-        # a German sentence tagged German: switches
+        # a German sentence, whatever the tag says (Cartesia tags everything en): switches
         await proc.process_frame(
-            TranscriptionFrame("Ich möchte bitte einen Termin.", "u", "t", language="de-DE"), FrameDirection.DOWNSTREAM
+            TranscriptionFrame("Ich möchte bitte einen Termin.", "u", "t", language="en-GB"), FrameDirection.DOWNSTREAM
         )  # fmt: skip
         assert proc.current == "de" and proc.switches == ["de"]
         notify.assert_called_once_with("language_switched", 77, language="de", previous_language="fr")
         assert sum(isinstance(f, TranscriptionFrame) for f, _ in pushed) == 3
+        # and back to French on the words alone, the tag still constant (run 52: « OK, parlons
+        # français » was held because the tag never changed)
+        await proc.process_frame(
+            TranscriptionFrame("OK, parlons français s'il vous plaît.", "u", "t", language="en-GB"), FrameDirection.DOWNSTREAM
+        )  # fmt: skip
+        assert proc.current == "fr" and proc.switches == ["de", "fr"]
 
 
 async def test_p07_a_language_the_agent_does_not_answer_in_is_left_alone():

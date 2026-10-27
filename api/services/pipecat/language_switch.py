@@ -27,9 +27,11 @@ never the words. Unset = no floor, P-07 as first built.
 ``SVP_LANGUAGE_SWITCH_CHECK_TEXT=on`` (the same amendment, the owner's call of 01:49): the
 recogniser's tag alone is not trusted - Cartesia's Ink 2 tagged « Oui, bonjour, je souhaite
 prendre rendez-vous pour une coiffure. » English. The transcript's own words are counted
-against a short table of function words per language (``STOP_WORDS``) and the switch is
-made only when the words say the same language as the tag; a transcript whose words decide
-nothing is held. Unset = the tag is trusted (stock P-07).
+against a short table of function words per language (``STOP_WORDS``) and **the words
+decide**: the switch is made to the language they say, the tag only logged - Cartesia's Ink 2
+tags every transcript ``en`` (run 52), so an agent that trusted the tag could never come
+back to French. A transcript whose words decide nothing is held. Unset = the tag decides
+(stock P-07).
 
 Unset, or no ``svp_languages``: nothing is added to the pipeline - stock behaviour."""
 
@@ -141,29 +143,33 @@ class LanguageSwitchProcessor(FrameProcessor):
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             heard = language_code(str(frame.language) if frame.language else None)
             words = len(frame.text.split())
-            if heard and heard != self._current and heard in self._languages and words:
+            if check_text():
+                # the words decide; the tag is logged (Cartesia's is constant, Azure's wrong on
+                # short utterances)
+                target = text_language(frame.text, set(self._languages)) if words else None
+                verdict = target or "nothing"
+            else:
+                target = heard
+                verdict = None
+            if words and target and target != self._current and target in self._languages:
                 floor = min_words()
-                said = (
-                    text_language(frame.text, set(self._languages) | {self._current})
-                    if check_text()
-                    else heard
-                )
                 if words < floor:
                     logger.info(
                         f"P-07: a {words}-word transcript tagged {heard} held (floor {floor} words); "
                         f"run {self._run_id}"
                     )
-                elif said != heard:
-                    logger.info(
-                        f"P-07: a {words}-word transcript tagged {heard} held - its words say "
-                        f"{said or 'nothing'}; run {self._run_id}"
-                    )
                 else:
                     logger.info(
-                        f"P-07: a {words}-word transcript tagged {heard}, its words agree: "
-                        f"switches; run {self._run_id}"
+                        f"P-07: a {words}-word transcript tagged {heard}"
+                        + (f", its words say {verdict}" if verdict else "")
+                        + f": switches to {target}; run {self._run_id}"
                     )
-                    await self._switch_to(heard)
+                    await self._switch_to(target)
+            elif words and verdict and heard and heard != self._current:
+                logger.info(
+                    f"P-07: a {words}-word transcript tagged {heard} held - its words say "
+                    f"{verdict}; run {self._run_id}"
+                )
             elif self._announce_pending and frame.text.strip() and self._engine is not None:
                 # the reply after the switch carried the announcement; from this utterance
                 # on the instructions say the language only
