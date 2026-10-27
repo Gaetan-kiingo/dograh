@@ -267,3 +267,20 @@ def test_p41_the_configuration_request_takes_a_region():
     assert TwilioConfigurationRequest(account_sid="AC" + "1" * 32, auth_token="t").region == "us1"
     assert SPEC.config_loader({"account_sid": "x", "auth_token": "y", "region": "ie1"})["region"] == "ie1"
     assert SPEC.config_loader({"account_sid": "x", "auth_token": "y"})["region"] == "us1"
+
+
+def test_p34_a_number_whose_credential_is_gone_is_still_removed(monkeypatch):
+    """ADR-053 amendment of 2026-10-27 (the owner's revoke on the VM): the platform no longer
+    serves a revoked connection's token, so the runtime cannot detach the number at the
+    carrier - the row goes all the same, the answer says the carrier was not told."""
+    from api.routes.organization import row_removed_without_the_carrier
+
+    monkeypatch.setenv("SVP_TELEPHONY_SECRET_REFS", "on")
+    assert row_removed_without_the_carrier(
+        "Provider load failed: the platform refused the provider keys (409 secret_not_found)"
+    )
+    # a carrier that answered and refused is still a refusal
+    assert not row_removed_without_the_carrier("Twilio VoiceUrl update failed for …08 (401)")
+    assert not row_removed_without_the_carrier(None)
+    monkeypatch.delenv("SVP_TELEPHONY_SECRET_REFS")
+    assert not row_removed_without_the_carrier("Provider load failed: x")

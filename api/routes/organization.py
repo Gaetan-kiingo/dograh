@@ -772,6 +772,22 @@ async def _ensure_provider_phone_number(
         )
 
 
+def row_removed_without_the_carrier(message: str | None) -> bool:
+    """P-34 amended (Swiss Voice Platform, ADR-053 amendment of 2026-10-27; TEL-002): with
+    the carrier's token held by reference, a number whose connection the business revoked
+    can no longer be detached at the carrier - the platform no longer serves the token. The
+    runtime's row is removed all the same and the answer says the carrier was not told
+    (``provider_sync.ok = false``): the carrier keeps a stale voice URL that the next
+    registration rewrites, and the platform's record moves on instead of staying pinned to
+    a credential that is gone. Only a *provider load* failure is forgiven - a carrier that
+    answered and refused is still a 502. Unset switch = stock: every failure a 502."""
+    from api.services.telephony.factory import telephony_secret_references_enabled
+
+    if not telephony_secret_references_enabled():
+        return False
+    return str(message or "").startswith("Provider load failed")
+
+
 async def _sync_inbound_for_phone_number(
     config_id: int, organization_id: int, address: str, *, attach: bool = True
 ) -> ProviderSyncStatus:
@@ -1560,7 +1576,7 @@ async def delete_phone_number(
         existing.address,
         attach=False,
     )
-    if not provider_sync.ok:
+    if not provider_sync.ok and not row_removed_without_the_carrier(provider_sync.message):
         raise HTTPException(
             status_code=502,
             detail=(
