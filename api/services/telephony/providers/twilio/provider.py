@@ -32,6 +32,22 @@ def inbound_status_callback_enabled() -> bool:
     return os.environ.get("SVP_CARRIER_STATUS", "").strip().lower() in ("on", "1", "true")
 
 
+REGION_EDGES: Dict[str, str] = {"ie1": "dublin", "au1": "sydney"}
+
+
+def twilio_regions_enabled() -> bool:
+    return os.environ.get("SVP_TWILIO_REGIONS", "").strip().lower() in ("on", "1", "true")
+
+
+def twilio_api_host(region: str) -> str:
+    """P-41: the REST host of a Twilio Region; `api.twilio.com` for us1 and whenever the
+    switch is off."""
+    edge = REGION_EDGES.get((region or "").lower())
+    if not edge or not twilio_regions_enabled():
+        return "api.twilio.com"
+    return f"api.{edge}.{region.lower()}.twilio.com"
+
+
 class TwilioProvider(TelephonyProvider):
     """
     Twilio implementation of TelephonyProvider.
@@ -61,7 +77,13 @@ class TwilioProvider(TelephonyProvider):
         if isinstance(self.from_numbers, str):
             self.from_numbers = [self.from_numbers]
 
-        self.base_url = f"https://api.twilio.com/2010-04-01/Accounts/{self.account_sid}"
+        # P-41 (Swiss Voice Platform, ADR-053 amendment of 2026-10-27; CF-172): the REST host
+        # of the configuration's Region - api.dublin.ie1.twilio.com for Ireland,
+        # api.sydney.au1.twilio.com for Australia, api.twilio.com for us1. The signature of
+        # every webhook is checked with the same credentials, which Twilio issues per Region.
+        # Unset switch = stock: api.twilio.com whatever the configuration says.
+        self.region = str(config.get("region") or "us1").lower()
+        self.base_url = f"https://{twilio_api_host(self.region)}/2010-04-01/Accounts/{self.account_sid}"
 
     async def initiate_call(
         self,

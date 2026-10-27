@@ -233,3 +233,37 @@ async def test_p34_a_reference_the_environment_lacks_is_asked_of_the_platform_fo
     factory._CARRIER_SECRETS.clear()
     assert (await factory.resolve_telephony_secret_references_for_org(config, 7))["auth_token"] == "env-token"
     assert len(asked) == 2
+
+
+def test_p41_the_rest_host_follows_the_configurations_region_with_the_switch(monkeypatch):
+    """ADR-053 amendment of 2026-10-27 (CF-172): Twilio's Regions are isolated, credentials
+    included - the owner's Ireland number ignored the US1 configuration and its webhooks
+    failed the signature check with the US token."""
+    from api.services.telephony.providers.twilio.provider import TwilioProvider, twilio_api_host
+
+    monkeypatch.setenv("SVP_TWILIO_REGIONS", "on")
+    assert twilio_api_host("ie1") == "api.dublin.ie1.twilio.com"
+    assert twilio_api_host("au1") == "api.sydney.au1.twilio.com"
+    assert twilio_api_host("us1") == "api.twilio.com"
+    assert twilio_api_host("") == "api.twilio.com"
+    sid = "AC" + "0" * 32
+    irish = TwilioProvider({"account_sid": sid, "auth_token": "t", "region": "ie1"})
+    assert irish.base_url == f"https://api.dublin.ie1.twilio.com/2010-04-01/Accounts/{sid}"
+    stock = TwilioProvider({"account_sid": sid, "auth_token": "t"})
+    assert stock.region == "us1" and stock.base_url.startswith("https://api.twilio.com/")
+    # unset = stock, whatever the configuration says
+    monkeypatch.delenv("SVP_TWILIO_REGIONS")
+    assert TwilioProvider({"account_sid": sid, "auth_token": "t", "region": "ie1"}).base_url.startswith(
+        "https://api.twilio.com/"
+    )
+
+
+def test_p41_the_configuration_request_takes_a_region():
+    from api.services.telephony.providers.twilio import SPEC
+    from api.services.telephony.providers.twilio.config import TwilioConfigurationRequest
+
+    request = TwilioConfigurationRequest(account_sid="AC" + "1" * 32, auth_token="t", region="ie1")
+    assert request.region == "ie1"
+    assert TwilioConfigurationRequest(account_sid="AC" + "1" * 32, auth_token="t").region == "us1"
+    assert SPEC.config_loader({"account_sid": "x", "auth_token": "y", "region": "ie1"})["region"] == "ie1"
+    assert SPEC.config_loader({"account_sid": "x", "auth_token": "y"})["region"] == "us1"

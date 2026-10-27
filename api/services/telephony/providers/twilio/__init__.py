@@ -19,6 +19,7 @@ def _config_loader(value: Dict[str, Any]) -> Dict[str, Any]:
         "provider": "twilio",
         "account_sid": value.get("account_sid"),
         "auth_token": value.get("auth_token"),
+        "region": value.get("region", "us1"),
         "from_numbers": value.get("from_numbers", []),
         "amd_enabled": value.get("amd_enabled", False),
     }
