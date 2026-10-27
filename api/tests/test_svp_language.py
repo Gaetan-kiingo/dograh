@@ -99,6 +99,35 @@ async def test_p07_a_final_transcript_in_another_admitted_language_switches_once
         assert engine.calls[-1][0] == "fr"
 
 
+async def test_p07_a_transcript_under_the_word_floor_never_switches(monkeypatch):
+    """ADR-058 amendment of 2026-10-27 (CF-190): « Oui » came back as the English « We. » and
+    the agent switched; with SVP_LANGUAGE_SWITCH_MIN_WORDS=4 a one-word (« Deutsch. », the
+    owner's German call) or three-word transcript is held and a sentence of four words or
+    more switches."""
+    monkeypatch.setenv("SVP_LANGUAGE_SWITCH_MIN_WORDS", "4")
+    engine = _Engine()
+    proc, pushed = _processor(engine)
+    with patch("api.services.svp_call_events.notify") as notify:
+        await proc.process_frame(TranscriptionFrame("Deutsch.", "u", "t", language="de-DE"), FrameDirection.DOWNSTREAM)  # fmt: skip
+        assert proc.current == "fr" and proc.switches == [] and engine.calls == []
+        await proc.process_frame(
+            TranscriptionFrame("Sprechen Sie Deutsch?", "u", "t", language="de-DE"), FrameDirection.DOWNSTREAM
+        )  # fmt: skip
+        assert proc.current == "fr" and proc.switches == []
+        # the held transcripts still go on downstream, untouched
+        assert sum(isinstance(f, TranscriptionFrame) for f, _ in pushed) == 2
+        await proc.process_frame(
+            TranscriptionFrame("Ich möchte bitte einen Termin.", "u", "t", language="de-DE"), FrameDirection.DOWNSTREAM
+        )  # fmt: skip
+        assert proc.current == "de" and proc.switches == ["de"]
+        notify.assert_called_once_with("language_switched", 77, language="de", previous_language="fr")
+    # unset: no floor - P-07 as first built
+    monkeypatch.delenv("SVP_LANGUAGE_SWITCH_MIN_WORDS")
+    assert language_switch.min_words() == 0
+    monkeypatch.setenv("SVP_LANGUAGE_SWITCH_MIN_WORDS", "x")
+    assert language_switch.min_words() == 0
+
+
 async def test_p07_a_language_the_agent_does_not_answer_in_is_left_alone():
     engine = _Engine()
     proc, pushed = _processor(engine)

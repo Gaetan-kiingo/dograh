@@ -17,6 +17,13 @@ step and every later one, to answer in that language and to open the next reply 
 announcement, and the platform is told (``language_switched``, P-33). Interim transcripts
 never switch; a transcript in a language the agent does not answer in is left alone.
 
+``SVP_LANGUAGE_SWITCH_MIN_WORDS`` (ADR-058 amendment of 2026-10-27, CF-190): a final
+transcript shorter than that many words never switches - Azure's identification tags a
+short utterance in the wrong language too often (« Oui » heard as the English « We. »,
+« Deutsch. » tagged French); a caller who wants another language says a sentence
+(« Do you speak English? »). Every decision is logged with the word count and the tag,
+never the words. Unset = no floor, P-07 as first built.
+
 Unset, or no ``svp_languages``: nothing is added to the pipeline - stock behaviour."""
 
 from __future__ import annotations
@@ -34,6 +41,14 @@ if TYPE_CHECKING:
 
 def enabled() -> bool:
     return os.environ.get("SVP_LANGUAGE_SWITCH", "").strip().lower() in ("on", "1", "true")
+
+
+def min_words() -> int:
+    """The floor under which a transcript never switches; 0 = none (stock P-07)."""
+    try:
+        return max(0, int(os.environ.get("SVP_LANGUAGE_SWITCH_MIN_WORDS", "0").strip() or 0))
+    except ValueError:
+        return 0
 
 
 def languages_of(configurations: dict[str, Any] | None) -> dict[str, dict[str, str]]:
@@ -82,8 +97,19 @@ class LanguageSwitchProcessor(FrameProcessor):
         await super().process_frame(frame, direction)
         if isinstance(frame, TranscriptionFrame) and direction == FrameDirection.DOWNSTREAM:
             heard = language_code(str(frame.language) if frame.language else None)
-            if heard and heard != self._current and heard in self._languages and frame.text.strip():
-                await self._switch_to(heard)
+            words = len(frame.text.split())
+            if heard and heard != self._current and heard in self._languages and words:
+                floor = min_words()
+                if words < floor:
+                    logger.info(
+                        f"P-07: a {words}-word transcript tagged {heard} held (floor {floor} words); "
+                        f"run {self._run_id}"
+                    )
+                else:
+                    logger.info(
+                        f"P-07: a {words}-word transcript tagged {heard} switches; run {self._run_id}"
+                    )
+                    await self._switch_to(heard)
             elif self._announce_pending and frame.text.strip() and self._engine is not None:
                 # the reply after the switch carried the announcement; from this utterance
                 # on the instructions say the language only
