@@ -40,11 +40,22 @@ async def create_transport(
             f"Incomplete Twilio configuration for organization {organization_id}"
         )
 
+    # P-41 (ADR-053 amendment of 2026-10-27): the caller's leg is redirected into the
+    # conference, and hung up, on the host of the configuration's Region
+    from api.services.telephony.providers.twilio.provider import (
+        REGION_EDGES,
+        twilio_regions_enabled,
+    )
+
+    region = str(config.get("region") or "us1").lower()
+    edge = REGION_EDGES.get(region) if twilio_regions_enabled() else None
     serializer = TwilioFrameSerializer(
         stream_sid=stream_sid,
         call_sid=call_sid,
         account_sid=account_sid,
         auth_token=auth_token,
+        region=region if edge else None,
+        edge=edge,
         transfer_strategy=TwilioConferenceStrategy(),
         hangup_strategy=TwilioHangupStrategy(),
     )

@@ -903,13 +903,24 @@ class CustomToolManager:
                         f"resolution_id={resolved_transfer.resolution_id or ''} "
                         f"destination={masked_destination} timeout={timeout_seconds}"
                     )
+                    # P-40 part 2: announced or blind, the edge's dial string; P-42: the
+                    # whisper in the agent's language and the number the caller dialled as
+                    # the caller id, for Twilio's native path
+                    svp_facts: dict = {"svp_mode": config.get("svp_mode")}
+                    if svp_handoff.enabled():
+                        svp_facts.update(
+                            svp_whisper=config.get("svp_whisper"),
+                            svp_whisper_language=config.get("svp_whisper_language"),
+                            svp_from_number=(
+                                getattr(workflow_run, "initial_context", None) or {}
+                            ).get("called_number"),
+                        )
                     transfer_result = await provider.transfer_call(
                         destination=destination,
                         transfer_id=transfer_id,
                         conference_name=conference_name,
                         timeout=timeout_seconds,
-                        # P-40 part 2: announced or blind, the edge's dial string
-                        svp_mode=config.get("svp_mode"),
+                        **svp_facts,
                     )
                 except Exception as e:
                     logger.error(f"Transfer provider failed: {e}")

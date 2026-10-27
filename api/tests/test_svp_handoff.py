@@ -109,3 +109,93 @@ def test_p40_the_platform_is_told_the_three_moments():
     # the number is never part of it: only the name the business gave
     for call in notify.call_args_list:
         assert "+41" not in str(call)
+
+
+# --- P-42: the handoff on Twilio's native path (ADR-060 amendment of 2026-10-27) ---------------
+
+
+def test_p42_the_destination_hears_the_platforms_whisper_in_the_agents_language(monkeypatch):
+    from api.services.telephony.providers.twilio.provider import transfer_twiml
+
+    monkeypatch.setenv("SVP_TWILIO_HANDOFF", "on")
+    announced = transfer_twiml(
+        "transfer-CA1",
+        {"svp_mode": "announced", "svp_whisper": "Un appel vous est passé par l'assistant de Cabinet & Co. Vous êtes en ligne.", "svp_whisper_language": "fr-FR"},
+    )  # fmt: skip
+    assert '<Say language="fr-FR">Un appel vous est passé' in announced
+    assert "Cabinet &amp; Co." in announced  # escaped for TwiML
+    assert "You have answered a transfer call" not in announced
+    assert '<Conference endConferenceOnExit="true">transfer-CA1</Conference>' in announced
+    # blind: no word to the person
+    blind = transfer_twiml("transfer-CA1", {"svp_mode": "blind", "svp_whisper": "x", "svp_whisper_language": "fr-FR"})
+    assert "<Say" not in blind and "<Conference" in blind
+    # unset = stock: Twilio's English sentence
+    monkeypatch.delenv("SVP_TWILIO_HANDOFF")
+    assert "You have answered a transfer call" in transfer_twiml("transfer-CA1", {"svp_mode": "announced"})
+
+
+@pytest.mark.asyncio
+async def test_p42_the_caller_id_is_the_number_the_caller_dialled(monkeypatch):
+    """The configuration lists no from_numbers (bring your own carrier): the handoff dials
+    from the business's own number, and the svp_* facts never reach Twilio as fields."""
+    from api.services.telephony.providers.twilio import provider as twilio_provider
+
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+        async def text(self):
+            return ""
+
+    class _Session:
+        posted: list[dict] = []
+
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            pass
+
+        def post(self, endpoint, data=None, auth=None):
+            _Session.posted.append({"endpoint": endpoint, "data": dict(data or {})})
+            return _Response()
+
+    monkeypatch.setenv("SVP_TWILIO_HANDOFF", "on")
+    monkeypatch.setattr(twilio_provider.aiohttp, "ClientSession", _Session)
+
+    async def endpoints():
+        return "https://voice.example.ch", "wss://voice.example.ch"
+
+    monkeypatch.setattr(twilio_provider, "get_backend_endpoints", endpoints)
+    _Session.posted.clear()
+    sid = "AC" + "0" * 32
+    provider = twilio_provider.TwilioProvider({"account_sid": sid, "auth_token": "t", "region": "ie1"})
+    with pytest.raises(Exception):
+        # stock still needs from_numbers when no caller id is given
+        monkeypatch.setenv("SVP_TWILIO_HANDOFF", "")
+        await provider.transfer_call("+41791234567", "tr1", "transfer-CA1", 25, svp_mode="announced")
+    monkeypatch.setenv("SVP_TWILIO_HANDOFF", "on")
+    _Session.posted.clear()
+    try:
+        await provider.transfer_call(
+            "+41791234567", "tr1", "transfer-CA1", 25,
+            svp_mode="announced", svp_whisper="Bonjour.", svp_whisper_language="fr-FR",
+            svp_from_number="+41215394092",
+        )  # fmt: skip
+    except Exception:
+        pass  # the fake answers no JSON; the request is what the test reads
+    [posted] = _Session.posted
+    assert posted["data"]["From"] == "+41215394092" and posted["data"]["To"] == "+41791234567"
+    assert posted["data"]["Timeout"] == 25
+    assert not any(k.startswith("svp_") for k in posted["data"])
+    assert '<Say language="fr-FR">Bonjour.</Say>' in posted["data"]["Twiml"]
+    assert posted["endpoint"].startswith("https://api.twilio.com/") or posted["endpoint"].startswith("https://api.dublin.ie1.twilio.com/")
+    assert posted["data"]["StatusCallback"] == "https://voice.example.ch/api/v1/telephony/transfer-result/tr1"

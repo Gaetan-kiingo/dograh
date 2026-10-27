@@ -39,6 +39,52 @@ def twilio_regions_enabled() -> bool:
     return os.environ.get("SVP_TWILIO_REGIONS", "").strip().lower() in ("on", "1", "true")
 
 
+def twilio_handoff_enabled() -> bool:
+    """P-42 (Swiss Voice Platform, ADR-060 amendment of 2026-10-27; TEL-008, TEL-010): the
+    human handoff on Twilio's native path - the caller id is the number the caller dialled,
+    the destination hears the platform's whisper in the agent's language (announced) or
+    nothing (blind), the transfer-result webhook is checked like every other. Unset = stock."""
+    return os.environ.get("SVP_TWILIO_HANDOFF", "").strip().lower() in ("on", "1", "true")
+
+
+def _xml_text(value: str) -> str:
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def transfer_twiml(conference_name: str, svp: Dict[str, Any] | None = None) -> str:
+    """The TwiML the destination's leg runs when it answers: the whisper first (P-42,
+    announced mode, the platform's sentence in the agent's language), then the conference
+    the caller is moved into. Stock: Twilio's English sentence."""
+    svp = svp or {}
+    if twilio_handoff_enabled():
+        whisper = str(svp.get("svp_whisper") or "").strip()
+        mode = str(svp.get("svp_mode") or "announced").lower()
+        language = str(svp.get("svp_whisper_language") or "fr-FR")
+        say = (
+            f'    <Say language="{_xml_text(language)}">{_xml_text(whisper)}</Say>\n'
+            if mode == "announced" and whisper
+            else ""
+        )
+    else:
+        say = "    <Say>You have answered a transfer call. Connecting you now.</Say>\n"
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<Response>\n"
+        f"{say}"
+        "    <Dial>\n"
+        f'        <Conference endConferenceOnExit="true">{_xml_text(conference_name)}'
+        "</Conference>\n"
+        "    </Dial>\n"
+        "</Response>"
+    )
+
+
 def twilio_api_host(region: str) -> str:
     """P-41: the REST host of a Twilio Region; `api.twilio.com` for us1 and whenever the
     switch is off."""
@@ -693,11 +739,22 @@ class TwilioProvider(TelephonyProvider):
             ValueError: If provider configuration is invalid
             Exception: If Twilio API call fails
         """
-        if not self.validate_config():
-            raise ValueError("Twilio provider not properly configured")
-
-        from_number = self.select_from_number()
-        logger.info(f"Selected phone number {from_number} for transfer call")
+        # P-42: the platform's handoff facts ride as svp_* keyword arguments - never posted
+        # to Twilio as form fields
+        svp = {key: kwargs.pop(key) for key in list(kwargs) if key.startswith("svp_")}
+        from_number = str(svp.get("svp_from_number") or "").strip()
+        if twilio_handoff_enabled() and from_number:
+            # the caller id is the number the caller dialled - the business's own number,
+            # which the configuration need not list (bring your own carrier: the platform's
+            # number record knows it)
+            if not (self.account_sid and self.auth_token):
+                raise ValueError("Twilio provider not properly configured")
+            logger.info("P-42: the handoff's caller id is the number the caller dialled")
+        else:
+            if not self.validate_config():
+                raise ValueError("Twilio provider not properly configured")
+            from_number = self.select_from_number()
+            logger.info(f"Selected phone number {from_number} for transfer call")
 
         backend_endpoint, _ = await get_backend_endpoints()
 
@@ -705,14 +762,8 @@ class TwilioProvider(TelephonyProvider):
             f"{backend_endpoint}/api/v1/telephony/transfer-result/{transfer_id}"
         )
 
-        # Inline TwiML: when the destination answers, put them into the conference
-        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say>You have answered a transfer call. Connecting you now.</Say>
-    <Dial>
-        <Conference endConferenceOnExit="true">{conference_name}</Conference>
-    </Dial>
-</Response>"""
+        # Inline TwiML: when the destination answers, the whisper (P-42) then the conference
+        twiml = transfer_twiml(conference_name, svp)
 
         # Prepare Twilio API call data
         endpoint = f"{self.base_url}/Calls.json"
