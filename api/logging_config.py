@@ -127,7 +127,10 @@ def setup_logging():
     )
     patched = loguru.logger
 
-    log_format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | <level>{level}</level> | [run_id={extra[run_id]}] | {file.name}:{line} | {message}"
+        # P-36 (Swiss Voice Platform, ADR-002; CF-062): the trace id the platform sent, on every
+    # line that has one (empty otherwise) - kept on the record since 2026-10-23, printed since
+    # 2026-10-27 (the rig's log showed the redaction, not the trace)
+    log_format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | <level>{level}</level> | [run_id={extra[run_id]}] [trace={extra[trace_id]}] | {file.name}:{line} | {message}"
 
     # Add handler - either file or console
     if LOG_FILE_PATH:
