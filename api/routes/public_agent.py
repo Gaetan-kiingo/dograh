@@ -409,6 +409,9 @@ async def _initiate_call(
     target_resolver: Callable[..., Awaitable[ResolvedAgentTarget]],
 ) -> TriggerCallResponse:
     """Resolve the requested public target, then execute the common call flow."""
+    from api.services import svp_outbound
+
+    svp_outbound.refuse_stock_trigger()  # P-43: closed when the platform owns outbound
     api_key = await _validate_api_key(x_api_key)
     target = await target_resolver(
         identifier,

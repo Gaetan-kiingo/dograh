@@ -98,8 +98,12 @@ class ARIProvider(TelephonyProvider):
         if to_number.startswith("SIP/") or to_number.startswith("PJSIP/"):
             sip_endpoint = to_number
         else:
-            # Default to PJSIP technology
-            sip_endpoint = f"PJSIP/{to_number}"
+            # P-43 (Swiss Voice Platform, ADR-015 amendment of 2026-10-27): the edge's own
+            # template (SVP_ARI_OUTBOUND_DIAL) decides the trunk for a platform's E.164
+            # destination; stock PJSIP/<number> when unset
+            from api.services.svp_outbound import outbound_dial_string
+
+            sip_endpoint = outbound_dial_string(to_number)
 
         # Prepare channel creation data
         params = {

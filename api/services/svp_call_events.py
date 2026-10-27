@@ -173,6 +173,8 @@ async def _run_body(run_id: int) -> dict[str, Any] | None:
         # P-35 amended (D3b, ADR-056 amendment of 2026-10-27; TEL-007): the number the
         # carrier says the call was forwarded from - Twilio's ForwardedFrom
         "forwarded_from": forwarded_from_of(workflow_run),
+        # P-43 (D8c): the platform's outbound attempt this run was placed for
+        "attempt_id": initial.get("svp_attempt_id"),
     }
 
 

@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import (
     APIRouter,
     Depends,
+    Header,
     HTTPException,
     Request,
     WebSocket,
@@ -82,6 +83,68 @@ def _get_execution_user_id(workflow) -> int:
     return workflow.user_id
 
 
+class SvpOutboundRequest(BaseModel):
+    """P-43: the platform's instruction for one call it decided to place (OUT-025)."""
+
+    workflow_id: int
+    phone_number: str
+    attempt_id: str
+    initial_context: dict | None = None
+    telephony_configuration_id: int | None = None
+    from_phone_number_id: int | None = None
+
+
+@router.post("/svp/outbound")
+async def svp_outbound_call(
+    request: SvpOutboundRequest,
+    user: UserModel = Depends(get_user),
+    x_svp_outbound_authorization: str | None = Header(default=None, alias="X-SVP-Outbound-Authorization"),
+):
+    """P-43 (Swiss Voice Platform, ADR-015 amendment of 2026-10-27): a call the PLATFORM
+    places - the published definition, the contact in the run's context, the platform's
+    authorisation verified before anything is read; 404 without the switch."""
+    from api.routes.public_agent import (
+        ResolvedAgentTarget,
+        TriggerCallRequest,
+        _execute_resolved_target,
+    )
+    from api.services import svp_outbound
+
+    if not svp_outbound.outbound_auth_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    organization_id = user.selected_organization_id
+    svp_outbound.verify_authorization(
+        x_svp_outbound_authorization,
+        organization_id=organization_id,
+        workflow_id=request.workflow_id,
+        phone=request.phone_number,
+        attempt_id=request.attempt_id,
+    )
+    workflow = await db_client.get_workflow(request.workflow_id, organization_id=organization_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    context = dict(request.initial_context or {})
+    context["svp_attempt_id"] = request.attempt_id
+    target = ResolvedAgentTarget(
+        workflow=workflow,
+        organization_id=organization_id,
+        identifier_type="svp_outbound",
+        identifier_value=request.attempt_id,
+    )
+    return await _execute_resolved_target(
+        target,
+        TriggerCallRequest(
+            phone_number=request.phone_number,
+            initial_context=context,
+            telephony_configuration_id=request.telephony_configuration_id,
+            from_phone_number_id=request.from_phone_number_id,
+        ),
+        use_draft=False,
+        api_key_id=None,
+        api_key_created_by=None,
+    )
+
+
 @router.post(
     "/initiate-call",
     **sdk_expose(
@@ -94,6 +157,9 @@ async def initiate_call(
 ):
     """Initiate a call using the configured telephony provider from web browser. This is
     supposed to be a test call method for the draft version of the agent."""
+    from api.services import svp_outbound
+
+    svp_outbound.refuse_stock_trigger()  # P-43: the platform's door is the only one
 
     from api.services.organization_preferences import get_organization_preferences
 
