@@ -794,6 +794,25 @@ async def _handle_telephony_websocket(
             pass
 
 
+def inbound_error_503_enabled() -> bool:
+    """P-35 amended (D3b, ADR-056 amendment of 2026-10-27; CF-197): a call the runtime
+    cannot take - no workflow, a configuration it cannot load, a refused key - is answered
+    503 instead of a spoken error, so the carrier falls back to the number's fallback URL
+    (the platform's « say and record »). A signature failure is not one of them. Unset =
+    stock: the error TwiML, 200."""
+    import os
+
+    return os.environ.get("SVP_INBOUND_ERROR_503", "").strip().lower() in ("on", "1", "true")
+
+
+def _validation_error(provider_class, *args, **kwargs):
+    from fastapi import Response as _Response
+
+    if inbound_error_503_enabled():
+        return _Response(status_code=503, content="runtime unavailable", media_type="text/plain")
+    return provider_class.generate_validation_error_response(*args, **kwargs)
+
+
 @router.post("/inbound/run")
 async def handle_inbound_run(request: Request):
     """Workflow-agnostic inbound dispatcher.
@@ -861,7 +880,7 @@ async def handle_inbound_run(request: Request):
                 f"account_id={normalized_data.account_id} "
                 f"to={normalized_data.to_number}"
             )
-            return provider_class.generate_validation_error_response(
+            return _validation_error(provider_class, 
                 TelephonyError.PHONE_NUMBER_NOT_CONFIGURED
             )
 
@@ -884,7 +903,7 @@ async def handle_inbound_run(request: Request):
                 f"/inbound/run: number {normalized_data.to_number} has no "
                 f"inbound_workflow_id assigned"
             )
-            return provider_class.generate_validation_error_response(
+            return _validation_error(provider_class, 
                 TelephonyError.WORKFLOW_NOT_FOUND
             )
 
@@ -896,7 +915,7 @@ async def handle_inbound_run(request: Request):
             logger.warning(
                 f"/inbound/run: workflow not found {workflow_id} for org {config.organization_id}"
             )
-            return provider_class.generate_validation_error_response(
+            return _validation_error(provider_class, 
                 TelephonyError.WORKFLOW_NOT_FOUND
             )
         user_id = workflow.user_id
@@ -913,7 +932,7 @@ async def handle_inbound_run(request: Request):
                 f"/inbound/run: signature validation failed for "
                 f"{provider_class.PROVIDER_NAME}"
             )
-            return provider_class.generate_validation_error_response(
+            return _validation_error(provider_class, 
                 TelephonyError.SIGNATURE_VALIDATION_FAILED
             )
 
@@ -924,7 +943,7 @@ async def handle_inbound_run(request: Request):
                 timeout=0,
             )
         except CallConcurrencyLimitError:
-            return provider_class.generate_validation_error_response(
+            return _validation_error(provider_class, 
                 TelephonyError.CONCURRENT_CALL_LIMIT
             )
 
@@ -956,7 +975,7 @@ async def handle_inbound_run(request: Request):
                     workflow_run_id, quota_result.error_message or "Quota exceeded"
                 )
                 await call_concurrency.release_workflow_run_slot(workflow_run_id)
-                return provider_class.generate_validation_error_response(
+                return _validation_error(provider_class, 
                     TelephonyError.QUOTA_EXCEEDED
                 )
 
@@ -975,7 +994,7 @@ async def handle_inbound_run(request: Request):
                 backend_endpoint=backend_endpoint,
             )
         except WorkflowRunSlotAlreadyBoundError:
-            return provider_class.generate_validation_error_response(
+            return _validation_error(provider_class, 
                 TelephonyError.CONCURRENT_CALL_LIMIT
             )
         except Exception as e:
@@ -1086,7 +1105,7 @@ async def handle_inbound_telephony(
 
         if not is_valid:
             logger.error(f"Request validation failed: {error_type}")
-            return provider_class.generate_validation_error_response(error_type)
+            return _validation_error(provider_class, error_type)
 
         user_id = workflow_context["user_id"]
         organization_id = workflow_context["organization_id"]
@@ -1097,7 +1116,7 @@ async def handle_inbound_telephony(
                 timeout=0,
             )
         except CallConcurrencyLimitError:
-            return provider_class.generate_validation_error_response(
+            return _validation_error(provider_class, 
                 TelephonyError.CONCURRENT_CALL_LIMIT
             )
 
@@ -1131,7 +1150,7 @@ async def handle_inbound_telephony(
                     workflow_run_id, quota_result.error_message or "Quota exceeded"
                 )
                 await call_concurrency.release_workflow_run_slot(workflow_run_id)
-                return provider_class.generate_validation_error_response(
+                return _validation_error(provider_class, 
                     TelephonyError.QUOTA_EXCEEDED
                 )
 
@@ -1148,7 +1167,7 @@ async def handle_inbound_telephony(
                 backend_endpoint=backend_endpoint,
             )
         except WorkflowRunSlotAlreadyBoundError:
-            return provider_class.generate_validation_error_response(
+            return _validation_error(provider_class, 
                 TelephonyError.CONCURRENT_CALL_LIMIT
             )
         except Exception as e:

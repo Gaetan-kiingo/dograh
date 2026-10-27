@@ -284,3 +284,44 @@ def test_p34_a_number_whose_credential_is_gone_is_still_removed(monkeypatch):
     assert not row_removed_without_the_carrier(None)
     monkeypatch.delenv("SVP_TELEPHONY_SECRET_REFS")
     assert not row_removed_without_the_carrier("Provider load failed: x")
+
+
+def test_p35_the_forwarded_number_rides_every_event(monkeypatch):
+    """D3b (ADR-056 amendment of 2026-10-27; TEL-007): Twilio's ForwardedFrom on the inbound
+    webhook the run was created from, on the call's events."""
+    from types import SimpleNamespace
+
+    from api.services.svp_call_events import forwarded_from_of
+
+    run = SimpleNamespace(logs={"inbound_webhook": {"raw_webhook_data": {"ForwardedFrom": "+41215550000"}}})
+    assert forwarded_from_of(run) == "+41215550000"
+    assert forwarded_from_of(SimpleNamespace(logs={})) is None
+    assert forwarded_from_of(SimpleNamespace(logs=None)) is None
+
+
+def test_p35_a_call_the_runtime_cannot_take_is_a_503_with_the_switch(monkeypatch):
+    """CF-197: so the carrier falls back to the number's fallback URL (the platform's say and
+    record) instead of hearing a spoken error."""
+    from api.routes.telephony import _validation_error, inbound_error_503_enabled
+
+    class _Provider:
+        @staticmethod
+        def generate_validation_error_response(error_type):
+            from fastapi import Response
+
+            return Response(content="<Response/>", media_type="application/xml")
+
+    monkeypatch.delenv("SVP_INBOUND_ERROR_503", raising=False)
+    assert not inbound_error_503_enabled()
+    assert _validation_error(_Provider, "x").status_code == 200
+    monkeypatch.setenv("SVP_INBOUND_ERROR_503", "on")
+    assert _validation_error(_Provider, "x").status_code == 503
+
+
+def test_p35_a_connected_calls_final_status_is_told_only_with_the_switch(monkeypatch):
+    from api.services.telephony.status_processor import carrier_status_to_platform_enabled
+
+    monkeypatch.delenv("SVP_CARRIER_STATUS", raising=False)
+    assert not carrier_status_to_platform_enabled()
+    monkeypatch.setenv("SVP_CARRIER_STATUS", "on")
+    assert carrier_status_to_platform_enabled()

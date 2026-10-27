@@ -125,6 +125,13 @@ class StatusCallbackRequest(BaseModel):
     extra: dict = {}
 
 
+def carrier_status_to_platform_enabled() -> bool:
+    """P-35's switch: the carrier's word reaches the platform (SVP_CARRIER_STATUS)."""
+    import os
+
+    return os.environ.get("SVP_CARRIER_STATUS", "").strip().lower() in ("on", "1", "true")
+
+
 async def _process_status_update(workflow_run_id: int, status: StatusCallbackRequest):
     """Process status updates from telephony providers.
 
@@ -158,6 +165,14 @@ async def _process_status_update(workflow_run_id: int, status: StatusCallbackReq
         logger.info(
             f"[run {workflow_run_id}] Call completed with duration: {status.duration}s"
         )
+        # P-35 amended (D3b, ADR-056 amendment of 2026-10-27; TEL-006, CF-194): the carrier's
+        # own figure for a call that connected, kept on the platform's session
+        if carrier_status_to_platform_enabled():
+            from api.services import svp_call_events
+
+            svp_call_events.carrier_status(
+                workflow_run_id, status=status_value, duration=status.duration, call_id=status.call_id
+            )
 
         await campaign_call_dispatcher.release_call_slot(workflow_run_id)
 

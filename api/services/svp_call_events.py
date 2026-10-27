@@ -170,7 +170,27 @@ async def _run_body(run_id: int) -> dict[str, Any] | None:
         "provider": initial.get("provider"),
         "caller_number": initial.get("caller_number"),
         "called_number": initial.get("called_number"),
+        # P-35 amended (D3b, ADR-056 amendment of 2026-10-27; TEL-007): the number the
+        # carrier says the call was forwarded from - Twilio's ForwardedFrom
+        "forwarded_from": forwarded_from_of(workflow_run),
     }
+
+
+def forwarded_from_of(workflow_run: Any) -> str | None:
+    """Twilio's `ForwardedFrom` on the inbound webhook the run was created from, if any."""
+    logs = getattr(workflow_run, "logs", None) or {}
+    raw = ((logs.get("inbound_webhook") or {}).get("raw_webhook_data") or {}) if isinstance(logs, dict) else {}
+    value = str(raw.get("ForwardedFrom") or raw.get("forwarded_from") or "").strip()
+    return value[:32] or None
+
+
+def carrier_status(run_id: int, *, status: str, duration: Any = None, call_id: str | None = None) -> None:
+    """P-35 amended (D3b): the carrier's terminal status of a CONNECTED call - the
+    platform keeps it on the session even after the call ended on its own path."""
+    notify(
+        "carrier_status", run_id,
+        carrier_status=str(status or "")[:20], carrier_duration=duration, carrier_call_id=call_id,
+    )
 
 
 async def send(kind: str, run_id: int, **payload: Any) -> bool:
