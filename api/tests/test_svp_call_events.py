@@ -325,3 +325,16 @@ async def test_cf007_the_callers_yes_starts_the_recording_and_a_no_leaves_it_off
     await consent_func(SimpleNamespace(arguments={"granted": True}, result_callback=result_callback))
     assert started == [True]
     assert result_callback.call_args.args[0]["recording"] == "started"
+
+
+def test_p35_the_carrier_legs_codec_comes_from_the_edge_on_the_ari_path():
+    """CF-213 (2026-10-28): the owner's Peoplefone calls ran A-law on the wire while the
+    session said PCMU/8000 - this leg's format. The edge sets SVP_CODEC for the runtime."""
+    from api.services.svp_call_events import codec_of
+
+    assert codec_of({"svp_codec": "(alaw)"}, "ari") == "PCMA/8000"
+    assert codec_of({"svp_codec": "alaw"}, "ari") == "PCMA/8000"
+    assert codec_of({"svp_codec": "(ulaw|alaw)"}, "ari") == "PCMU/8000"
+    assert codec_of({"svp_codec": "(speex)"}, "ari") == "PCMU/8000"  # unknown: this leg's
+    assert codec_of({}, "ari") == "PCMU/8000" and codec_of({}, "twilio") == "PCMU/8000"
+    assert codec_of({}, "smallwebrtc") == "opus/48000"

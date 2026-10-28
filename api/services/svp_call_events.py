@@ -56,6 +56,18 @@ TEXT_MODES = ("textchat", "chat")
 # the codec of a leg in this runtime, by channel: Twilio's media streams and Asterisk's
 # external media are G.711 mu-law at 8 kHz; the browser negotiates Opus
 CODEC_BY_MODE = {"twilio": "PCMU/8000", "ari": "PCMU/8000", "smallwebrtc": "opus/48000"}
+# P-35 amended (CF-213): on the ARI path the edge says the carrier leg's format
+# (Asterisk's CHANNEL(audionativeformat): "(alaw)", "alaw", "(ulaw|alaw)" …)
+CODEC_BY_FORMAT = {"alaw": "PCMA/8000", "ulaw": "PCMU/8000", "g722": "G722/16000", "opus": "opus/48000", "g729": "G729/8000"}
+
+
+def codec_of(initial: dict, mode: str) -> str | None:
+    """The carrier leg's codec when the edge told it, this leg's otherwise."""
+    raw = str(initial.get("svp_codec") or "").strip().strip("()").lower()
+    for name in raw.replace(",", "|").split("|"):
+        if name.strip() in CODEC_BY_FORMAT:
+            return CODEC_BY_FORMAT[name.strip()]
+    return CODEC_BY_MODE.get(mode)
 
 _tasks: set[asyncio.Task] = set()
 # per run, in this process: when media came up, when the first sound went out, the
@@ -156,7 +168,7 @@ async def _run_body(run_id: int) -> dict[str, Any] | None:
         # through and the codec of the leg - fixed by the channel in this runtime
         "carrier_call_id": gathered.get("call_id"),
         "telephony_configuration_id": initial.get("telephony_configuration_id"),
-        "codec": CODEC_BY_MODE.get(mode),
+        "codec": codec_of(initial, mode),
         "organization_id": organization_id,
         "workflow_id": workflow_run.workflow_id,
         "run_id": run_id,
