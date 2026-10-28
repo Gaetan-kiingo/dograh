@@ -34,17 +34,43 @@ import os
 from typing import Any
 
 from loguru import logger
-from pipecat.frames.frames import Frame, InputDTMFFrame, TranscriptionFrame
+from pipecat.frames.frames import (
+    Frame,
+    InputDTMFFrame,
+    StartFrame,
+    TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.utils.time import time_now_iso8601
 
 STOCK_DIAL = "PJSIP/{destination}"
+EXTERNAL_TURN_STRATEGIES = "ExternalUserTurnStrategies"
 CHANNEL_PREFIXES = ("SIP/", "PJSIP/", "Local/")
 MODES = ("announced", "blind")
 
 
 def enabled() -> bool:
     return os.environ.get("SVP_HANDOFF", "").strip().lower() in ("on", "1", "true")
+
+
+def channel_vars_enabled() -> bool:
+    """P-44 (ADR-060 amendment of 2026-10-28, D4b's Peoplefone half): unset = stock."""
+    return os.environ.get("SVP_ARI_CHANNEL_VARS", "").strip().lower() in ("on", "1", "true")
+
+
+def channel_variables(stasis_app: str | None, mode: str | None = None) -> dict[str, str]:
+    """What the edge's dialplan learns about a leg the runtime originates: the Stasis
+    application it dials for (the workspace's trunk and caller id are globals named after
+    it on the edge) and the handoff's mode. The `__` prefix makes Asterisk hand the
+    variables down to the Local channel's dialplan leg and to what it dials."""
+    if not channel_vars_enabled() or not stasis_app:
+        return {}
+    out = {"__SVP_STASIS": str(stasis_app)}
+    if mode:
+        out["__SVP_MODE"] = str(mode)
+    return out
 
 
 def handoff_of(configurations: dict[str, Any] | None) -> dict[str, str] | None:
@@ -113,17 +139,32 @@ class HandoffKeypadProcessor(FrameProcessor):
         self._tool = tool
         self._run_id = run_id
         self.presses = 0
+        # CF-216 (2026-10-28, the owner's Peoplefone call): a recogniser that decides the
+        # turns itself (Cartesia Ink: ExternalUserTurnStrategies on the StartFrame) makes
+        # the aggregator infer only on its own turn end - the keypad's transcription sat
+        # until the caller spoke. Under those strategies the press ends the turn itself.
+        self._external_turns = False
+
+    def learn_turn_strategies(self, frame: Frame) -> None:
+        """The StartFrame says whether the recogniser decides the turns (Cartesia Ink sets
+        `user_turn_strategies` on it); the keypad then ends the turn itself."""
+        if isinstance(frame, StartFrame):
+            strategies = getattr(frame, "user_turn_strategies", None)
+            self._external_turns = type(strategies).__name__ == EXTERNAL_TURN_STRATEGIES
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
+        self.learn_turn_strategies(frame)
         if isinstance(frame, InputDTMFFrame) and frame.button.value == self._digit:
             self.presses += 1
             logger.info(
                 f"P-40: keypad {self._digit} pressed on run {self._run_id}: a person asked for "
-                f"({self._tool})"
+                f"({self._tool}; turn ended by the press: {self._external_turns})"
             )
             await self.push_frame(frame, direction)
             await self.broadcast_interruption()
+            if self._external_turns:
+                await self.push_frame(UserStartedSpeakingFrame(), direction)
             await self.push_frame(
                 TranscriptionFrame(
                     text=keypad_text(self._digit, self._tool),
@@ -133,5 +174,7 @@ class HandoffKeypadProcessor(FrameProcessor):
                 ),
                 direction,
             )
+            if self._external_turns:
+                await self.push_frame(UserStoppedSpeakingFrame(), direction)
             return
         await self.push_frame(frame, direction)

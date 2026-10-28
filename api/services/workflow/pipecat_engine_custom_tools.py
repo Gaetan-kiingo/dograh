@@ -907,6 +907,7 @@ class CustomToolManager:
                     # whisper in the agent's language and the number the caller dialled as
                     # the caller id, for Twilio's native path
                     svp_facts: dict = {"svp_mode": config.get("svp_mode")}
+                    svp_pubsub = None
                     if svp_handoff.enabled():
                         svp_facts.update(
                             svp_whisper=config.get("svp_whisper"),
@@ -915,6 +916,10 @@ class CustomToolManager:
                                 getattr(workflow_run, "initial_context", None) or {}
                             ).get("called_number"),
                         )
+                    # P-40 amendment (CF-217): listen for the outcome BEFORE dialling - the
+                    # edge may refuse the dial at once and publish the failure within
+                    # milliseconds; a subscription made after the originate missed it
+                    svp_pubsub = await call_transfer_manager.subscribe_transfer(transfer_id)
                     transfer_result = await provider.transfer_call(
                         destination=destination,
                         transfer_id=transfer_id,
@@ -925,6 +930,8 @@ class CustomToolManager:
                 except Exception as e:
                     logger.error(f"Transfer provider failed: {e}")
                     self._engine.set_mute_pipeline(False)
+                    if svp_pubsub is not None:
+                        await call_transfer_manager.release_subscription(svp_pubsub, transfer_id)
                     await call_transfer_manager.remove_transfer_context(transfer_id)
                     provider_error_result = {
                         "status": "failed",
@@ -992,7 +999,7 @@ class CustomToolManager:
                     logger.info("Waiting for transfer completion via Redis pub/sub...")
                     transfer_event = (
                         await call_transfer_manager.wait_for_transfer_completion(
-                            transfer_id, timeout_seconds
+                            transfer_id, timeout_seconds, pubsub=svp_pubsub
                         )
                     )
 

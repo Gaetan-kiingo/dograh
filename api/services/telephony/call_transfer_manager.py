@@ -149,8 +149,25 @@ class CallTransferManager:
         except Exception as e:
             logger.error(f"Failed to publish transfer event: {e}")
 
+    async def subscribe_transfer(self, transfer_id: str):
+        """P-40 amendment (CF-217, 2026-10-28): the completion channel subscribed BEFORE
+        the destination is dialled - a dial the edge refuses at once publishes its failure
+        within milliseconds of the originate, and a subscription made after it missed the
+        event (the caller then heard the ring tone for the whole timeout)."""
+        redis = await self._get_redis()
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(TransferRedisChannels.transfer_events(transfer_id))
+        return pubsub
+
+    async def release_subscription(self, pubsub, transfer_id: str) -> None:
+        try:
+            await pubsub.unsubscribe(TransferRedisChannels.transfer_events(transfer_id))
+            await pubsub.close()
+        except Exception as e:
+            logger.error(f"Error closing pubsub connection: {e}")
+
     async def wait_for_transfer_completion(
-        self, transfer_id: str, timeout_seconds: float = 30.0
+        self, transfer_id: str, timeout_seconds: float = 30.0, pubsub=None
     ) -> Optional[TransferEvent]:
         """Wait for transfer completion event using Redis pub/sub.
 
@@ -162,11 +179,11 @@ class CallTransferManager:
             Transfer completion event if received, None on timeout
         """
         channel = TransferRedisChannels.transfer_events(transfer_id)
-        redis = await self._get_redis()
-        pubsub = redis.pubsub()
-
         try:
-            await pubsub.subscribe(channel)
+            if pubsub is None:
+                redis = await self._get_redis()
+                pubsub = redis.pubsub()
+                await pubsub.subscribe(channel)
             logger.info(
                 f"Waiting for transfer completion on {channel} (timeout: {timeout_seconds}s)"
             )

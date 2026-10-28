@@ -199,3 +199,117 @@ async def test_p42_the_caller_id_is_the_number_the_caller_dialled(monkeypatch):
     assert '<Say language="fr-FR">Bonjour.</Say>' in posted["data"]["Twiml"]
     assert posted["endpoint"].startswith("https://api.twilio.com/") or posted["endpoint"].startswith("https://api.dublin.ie1.twilio.com/")
     assert posted["data"]["StatusCallback"] == "https://voice.example.ch/api/v1/telephony/transfer-result/tr1"
+
+
+# --- D4b's Peoplefone half (ADR-060 amendment of 2026-10-28): CF-216, CF-217, P-44 ---------
+
+
+def _start_frame(external: bool):
+    from pipecat.frames.frames import StartFrame
+
+    frame = StartFrame()
+    if external:
+        from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
+
+        frame.user_turn_strategies = ExternalUserTurnStrategies()
+    return frame
+
+
+@pytest.mark.asyncio
+async def test_cf216_under_a_recogniser_that_decides_the_turns_the_press_ends_the_turn():
+    """The owner's Peoplefone call of 2026-10-28 (run 89): with Cartesia Ink the keypad's
+    transcription sat until the caller spoke. The press now opens and closes a user turn
+    around its transcription when the StartFrame carries external turn strategies."""
+    from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+
+    proc, pushed = _processor()
+    proc.learn_turn_strategies(_start_frame(external=True))
+    await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
+    assert [type(f) for f in pushed] == [
+        InputDTMFFrame, UserStartedSpeakingFrame, TranscriptionFrame, UserStoppedSpeakingFrame,
+    ]  # fmt: skip
+    assert pushed[2].finalized and "[KEYPAD]" in pushed[2].text
+
+
+@pytest.mark.asyncio
+async def test_cf216_under_the_stock_turn_detection_the_press_pushes_the_transcription_only():
+    proc, pushed = _processor()
+    proc.learn_turn_strategies(_start_frame(external=False))
+    proc.learn_turn_strategies(TranscriptionFrame("x", "u", "t"))  # not a StartFrame: ignored
+    await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
+    assert [type(f) for f in pushed] == [InputDTMFFrame, TranscriptionFrame]
+
+
+def test_p44_the_originated_leg_carries_the_workspaces_application_for_the_edge():
+    """Unset = stock (no variables); on: the Stasis application and the mode, inheritable
+    (`__`) down to the Local channel's dialplan leg and what it dials."""
+    assert handoff.channel_variables("dograh_abc", "announced") == {}
+    with patch.dict(os.environ, {"SVP_ARI_CHANNEL_VARS": "on"}):
+        assert handoff.channel_variables("dograh_abc", "announced") == {
+            "__SVP_STASIS": "dograh_abc", "__SVP_MODE": "announced",
+        }  # fmt: skip
+        assert handoff.channel_variables("dograh_abc") == {"__SVP_STASIS": "dograh_abc"}
+        assert handoff.channel_variables("") == {} and handoff.channel_variables(None) == {}
+
+
+class _PubSub:
+    """A Redis pub/sub double: what was published before the listener runs is delivered."""
+
+    def __init__(self):
+        self.channels: list[str] = []
+        self.queue: list[dict] = []
+        self.closed = False
+
+    async def subscribe(self, channel):
+        self.channels.append(channel)
+
+    async def unsubscribe(self, channel):
+        self.channels.remove(channel)
+
+    async def close(self):
+        self.closed = True
+
+    async def listen(self):
+        while True:
+            if self.queue:
+                yield self.queue.pop(0)
+            else:
+                import asyncio
+
+                await asyncio.sleep(0.01)
+
+
+class _Redis:
+    def __init__(self):
+        self.ps = _PubSub()
+
+    def pubsub(self):
+        return self.ps
+
+
+@pytest.mark.asyncio
+async def test_cf217_a_failure_published_before_the_wait_is_not_missed():
+    """Run 89: the edge refused the dial at once, TRANSFER_FAILED was published 7 ms
+    before the tool subscribed, and the caller heard the ring tone for the whole timeout.
+    The subscription is made before the dial and the wait reads what arrived meanwhile."""
+    from api.services.telephony.call_transfer_manager import CallTransferManager
+    from api.services.telephony.transfer_event_protocol import TransferEvent, TransferEventType
+
+    redis = _Redis()
+    manager = CallTransferManager(redis_client=redis)
+    pubsub = await manager.subscribe_transfer("t-1")
+    assert pubsub.channels == ["transfer:events:t-1"]
+    # the failure lands between the subscription and the wait (the dial refused at once)
+    failed = TransferEvent(
+        type=TransferEventType.TRANSFER_FAILED, transfer_id="t-1", original_call_sid="c",
+        message="Transfer failed: No route to destination", status="failed",
+        action="transfer_failed", reason="rejected",
+    )  # fmt: skip
+    pubsub.queue.append({"type": "message", "data": failed.to_json()})
+    event = await manager.wait_for_transfer_completion("t-1", 1.0, pubsub=pubsub)
+    assert event is not None and event.type == TransferEventType.TRANSFER_FAILED
+    assert event.reason == "rejected" and pubsub.closed and pubsub.channels == []
+    # the tool releases the subscription when the provider itself fails
+    pubsub2 = await manager.subscribe_transfer("t-2")
+    await manager.release_subscription(pubsub2, "t-2")
+    assert pubsub2.channels == [] and pubsub2.closed

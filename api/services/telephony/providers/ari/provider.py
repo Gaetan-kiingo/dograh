@@ -125,6 +125,10 @@ class ARIProvider(TelephonyProvider):
         from_number = from_number or self.default_from_number
         if from_number:
             params["callerId"] = from_number
+        # P-44: the edge's dialplan learns which workspace this call is placed for
+        from api.services.pipecat.handoff import channel_variables
+
+        variables = channel_variables(self.stasis_app_name)
 
         logger.info(
             f"[ARI] Initiating call to {sip_endpoint} "
@@ -135,6 +139,7 @@ class ARIProvider(TelephonyProvider):
             async with session.post(
                 endpoint,
                 params=params,
+                json={"variables": variables} if variables else None,
                 auth=self._get_auth(),
             ) as response:
                 response_text = await response.text()
@@ -479,9 +484,11 @@ class ARIProvider(TelephonyProvider):
 
         # Build SIP endpoint - P-40 (Swiss Voice Platform, ADR-060): the edge decides how
         # a platform's E.164 destination is dialled (SVP_ARI_TRANSFER_DIAL), announced or blind
-        from api.services.pipecat.handoff import svp_dial_string
+        from api.services.pipecat.handoff import channel_variables, svp_dial_string
 
         sip_endpoint = svp_dial_string(destination, kwargs.get("svp_mode"))
+        # P-44: the edge's dialplan learns which workspace this leg is dialled for
+        variables = channel_variables(self.stasis_app_name, kwargs.get("svp_mode"))
 
         # Build transfer appArgs for event correlation
         app_args = f"transfer,{transfer_id}"
@@ -499,6 +506,7 @@ class ARIProvider(TelephonyProvider):
                 async with session.post(
                     endpoint,
                     params=params,
+                    json={"variables": variables} if variables else None,
                     auth=self._get_auth(),
                 ) as response:
                     response_text = await response.text()
