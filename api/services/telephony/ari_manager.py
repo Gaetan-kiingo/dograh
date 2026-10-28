@@ -1293,6 +1293,11 @@ class ARIConnection:
             return "The transfer call was not answered. The person may be busy or unavailable right now."
         elif cause == 21:  # Call rejected
             return "The transfer call failed to connect. There may be a network issue or the number is unavailable."
+        elif tech_cause == "402":
+            # P-40 amended (2026-10-28): the carrier refused the dial for lack of credit
+            return "Transfer failed: the carrier refused the call (SIP 402 Payment Required - no credit on the account)"
+        elif str(tech_cause).isdigit():
+            return f"Transfer failed: {cause_txt} (SIP {tech_cause})"
         else:
             return f"Transfer failed: {cause_txt}"
 

@@ -37,7 +37,6 @@ from loguru import logger
 from pipecat.frames.frames import (
     Frame,
     InputDTMFFrame,
-    StartFrame,
     TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
@@ -127,30 +126,42 @@ def failure_code(reason: Any, message: Any = "") -> str:
         return "busy"
     if "rejected" in text or "failed to connect" in text or "unavailable" in text:
         return "rejected"
+    # a carrier's refusal of the dial (SIP 4xx/5xx Asterisk maps to « Interworking »): the
+    # owner's trunk answered 402 Payment Required on 2026-10-28 (no credit on the account)
+    if "interworking" in text or "refused" in text or "sip 4" in text or "sip 5" in text:
+        return "rejected"
     return "other"
 
 
 class HandoffKeypadProcessor(FrameProcessor):
     """The configured keypad digit becomes the caller's request for a person (part 1)."""
 
-    def __init__(self, *, digit: str, tool: str, run_id: int | None, **kwargs):
+    def __init__(
+        self,
+        *,
+        digit: str,
+        tool: str,
+        run_id: int | None,
+        external_turns: bool = False,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self._digit = digit
         self._tool = tool
         self._run_id = run_id
         self.presses = 0
-        # CF-216 (2026-10-28, the owner's Peoplefone call): a recogniser that decides the
-        # turns itself (Cartesia Ink: ExternalUserTurnStrategies on the StartFrame) makes
-        # the aggregator infer only on its own turn end - the keypad's transcription sat
-        # until the caller spoke. Under those strategies the press ends the turn itself.
-        self._external_turns = False
+        # CF-216 (2026-10-28, the owner's Peoplefone calls): a recogniser that decides the
+        # turns itself (Cartesia Ink, ExternalUserTurnStrategies) makes the aggregator infer
+        # only on its own turn end - the keypad's transcription sat until the caller spoke.
+        # Under those strategies the press ends the turn itself. The pipeline says so when
+        # it builds this processor (`uses_external_turns`); a frame carrying the recogniser's
+        # recommended strategies (its service metadata frame) says so too.
+        self._external_turns = bool(external_turns)
 
     def learn_turn_strategies(self, frame: Frame) -> None:
-        """The StartFrame says whether the recogniser decides the turns (Cartesia Ink sets
-        `user_turn_strategies` on it); the keypad then ends the turn itself."""
-        if isinstance(frame, StartFrame):
-            strategies = getattr(frame, "user_turn_strategies", None)
-            self._external_turns = type(strategies).__name__ == EXTERNAL_TURN_STRATEGIES
+        strategies = getattr(frame, "user_turn_strategies", None)
+        if strategies is not None and type(strategies).__name__ == EXTERNAL_TURN_STRATEGIES:
+            self._external_turns = True
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)

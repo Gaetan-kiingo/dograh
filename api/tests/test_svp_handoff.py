@@ -204,15 +204,14 @@ async def test_p42_the_caller_id_is_the_number_the_caller_dialled(monkeypatch):
 # --- D4b's Peoplefone half (ADR-060 amendment of 2026-10-28): CF-216, CF-217, P-44 ---------
 
 
-def _start_frame(external: bool):
-    from pipecat.frames.frames import StartFrame
+class _MetadataFrame:
+    """What Cartesia's recogniser pushes to recommend its turn strategies."""
 
-    frame = StartFrame()
-    if external:
-        from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
+    def __init__(self, external: bool):
+        if external:
+            from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
 
-        frame.user_turn_strategies = ExternalUserTurnStrategies()
-    return frame
+            self.user_turn_strategies = ExternalUserTurnStrategies()
 
 
 @pytest.mark.asyncio
@@ -223,7 +222,7 @@ async def test_cf216_under_a_recogniser_that_decides_the_turns_the_press_ends_th
     from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
 
     proc, pushed = _processor()
-    proc.learn_turn_strategies(_start_frame(external=True))
+    proc.learn_turn_strategies(_MetadataFrame(external=True))
     await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
     assert [type(f) for f in pushed] == [
         InputDTMFFrame, UserStartedSpeakingFrame, TranscriptionFrame, UserStoppedSpeakingFrame,
@@ -234,10 +233,41 @@ async def test_cf216_under_a_recogniser_that_decides_the_turns_the_press_ends_th
 @pytest.mark.asyncio
 async def test_cf216_under_the_stock_turn_detection_the_press_pushes_the_transcription_only():
     proc, pushed = _processor()
-    proc.learn_turn_strategies(_start_frame(external=False))
-    proc.learn_turn_strategies(TranscriptionFrame("x", "u", "t"))  # not a StartFrame: ignored
+    proc.learn_turn_strategies(_MetadataFrame(external=False))
+    proc.learn_turn_strategies(TranscriptionFrame("x", "u", "t"))  # carries no strategies
     await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
     assert [type(f) for f in pushed] == [InputDTMFFrame, TranscriptionFrame]
+
+
+@pytest.mark.asyncio
+async def test_cf216_the_pipeline_tells_the_processor_it_runs_external_turns():
+    """The aggregator ignores the recogniser's recommendation and uses the pipeline's own
+    strategies (run 91, 2026-10-28: « turn ended by the press: False » although Ink decided
+    the turns): the pipeline passes what it knows when it builds the processor."""
+    from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+
+    proc = handoff.HandoffKeypadProcessor(digit="0", tool="t", run_id=1, external_turns=True)
+    pushed: list = []
+
+    async def push(frame, direction=FrameDirection.DOWNSTREAM):
+        pushed.append(frame)
+
+    proc.push_frame = push  # type: ignore[method-assign]
+    proc.broadcast_interruption = AsyncMock()  # type: ignore[method-assign]
+    proc._FrameProcessor__started = True
+    await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
+    assert [type(f) for f in pushed] == [
+        InputDTMFFrame, UserStartedSpeakingFrame, TranscriptionFrame, UserStoppedSpeakingFrame,
+    ]  # fmt: skip
+
+
+def test_p40_a_carriers_refusal_of_the_dial_is_rejected_not_other():
+    """Run 91: Peoplefone answered 402 Payment Required; Asterisk said « Interworking,
+    unspecified » and the platform's notice said « erreur technique »."""
+    assert handoff.failure_code("", "Transfer failed: Interworking, unspecified") == "rejected"
+    assert handoff.failure_code("", "Transfer failed: the carrier refused the call (SIP 402 Payment Required - no credit on the account)") == "rejected"  # noqa: E501
+    assert handoff.failure_code("", "Transfer failed: Normal, unspecified (SIP 500)") == "rejected"
+    assert handoff.failure_code("", "Transfer processing error: x") == "other"
 
 
 def test_p44_the_originated_leg_carries_the_workspaces_application_for_the_edge():

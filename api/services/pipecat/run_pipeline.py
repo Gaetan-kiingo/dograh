@@ -1095,6 +1095,8 @@ async def _run_pipeline_impl(
                 digit=svp_handoff_cfg["dtmf"],
                 tool=svp_handoff_cfg["tool"],
                 run_id=workflow_run_id,
+                # CF-216: under a recogniser that decides the turns, the press ends the turn
+                external_turns=uses_external_turns,
             )
         pipeline = build_pipeline(
             transport,
