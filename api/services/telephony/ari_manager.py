@@ -22,6 +22,13 @@ from urllib.parse import urlparse
 import aiohttp
 import redis.asyncio as aioredis
 import websockets
+
+from api.services.telephony.ari_endpoints import (
+    ari_endpoints_enabled,
+    forget_home,
+    remember_home,
+    split_ari_endpoints,
+)
 from loguru import logger
 
 from api.constants import REDIS_URL
@@ -242,7 +249,10 @@ class ARIConnection:
 
     @property
     def connection_key(self) -> str:
-        """Unique key for this connection — one per ARI config row."""
+        """Unique key for this connection — one per ARI config row (P-04: one per endpoint
+        of the row when a configuration names several)."""
+        if ari_endpoints_enabled():
+            return f"config:{self.telephony_configuration_id}:{self.ari_endpoint}"
         return f"config:{self.telephony_configuration_id}"
 
     async def start(self):
@@ -480,6 +490,8 @@ class ARIConnection:
         )
 
         if event_type == "StasisStart":
+            # P-04: the instance this channel lives on, for the provider's later calls
+            remember_home(channel_id, self.ari_endpoint)
             if await self._is_ext_channel(channel_id):
                 # External media channel has entered Stasis. If there is a
                 # queued bridge for it, finish bridging now; otherwise the
@@ -573,6 +585,7 @@ class ARIConnection:
             )
 
         elif event_type == "ChannelDestroyed":
+            forget_home(channel_id)
             cause = event.get("cause", 0)
             cause_txt = event.get("cause_txt", "unknown")
             tech_cause = event.get("tech_cause", "unknown")
@@ -907,6 +920,8 @@ class ARIConnection:
                     "external_pbx_call": external_pbx_call,
                     **({"svp_codec": svp_codec} if svp_codec else {}),
                     **({"svp_trunk": svp_trunk} if svp_trunk else {}),
+                    # P-04: the instance the call came in on - the handoff dials from it
+                    **({"svp_ari_endpoint": self.ari_endpoint} if ari_endpoints_enabled() else {}),
                 },
                 gathered_context={
                     "call_id": call_id,
@@ -1504,49 +1519,51 @@ class ARIManager:
             ws_client_name = config["ws_client_name"]
             external_pbx_config = config.get("external_pbx")
 
-            conn = ARIConnection(
-                org_id,
-                telephony_configuration_id,
-                ari_endpoint,
-                app_name,
-                app_password,
-                ws_client_name,
-                external_pbx_config,
-                stasis_app_name,
-            )
-            key = conn.connection_key
-
-            active_keys.add(key)
-
-            if key not in self._connections:
-                # New configuration - start connection
-                logger.info(
-                    f"[ARI Manager] New ARI config {telephony_configuration_id} "
-                    f"for org {org_id}: {redact_failure_message(ari_endpoint)}"
+            # P-04 (Swiss Voice Platform): several endpoints on one row = one connection each
+            for endpoint_ in split_ari_endpoints(ari_endpoint):
+                conn = ARIConnection(
+                    org_id,
+                    telephony_configuration_id,
+                    endpoint_,
+                    app_name,
+                    app_password,
+                    ws_client_name,
+                    external_pbx_config,
+                    stasis_app_name,
                 )
-                self._connections[key] = conn
-                await conn.start()
-            else:
-                # Existing configuration — reconnect if connection-level fields
-                # (endpoint, app, password, ws client) changed. Workflow IDs are
-                # resolved per-call via telephony_phone_numbers, so changes to
-                # them don't require a reconnect.
-                existing = self._connections[key]
-                if (
-                    existing.ari_endpoint != conn.ari_endpoint
-                    or existing.app_name != app_name
-                    or existing.app_password != app_password
-                    or existing.stasis_app_name != conn.stasis_app_name
-                    or existing.ws_client_name != ws_client_name
-                    or existing.external_pbx_config != external_pbx_config
-                ):
+                key = conn.connection_key
+
+                active_keys.add(key)
+
+                if key not in self._connections:
+                    # New configuration - start connection
                     logger.info(
-                        f"[ARI Manager] Config {telephony_configuration_id} "
-                        f"changed for org {org_id}, reconnecting..."
+                        f"[ARI Manager] New ARI config {telephony_configuration_id} "
+                        f"for org {org_id}: {redact_failure_message(endpoint_)}"
                     )
-                    await existing.stop()
                     self._connections[key] = conn
                     await conn.start()
+                else:
+                    # Existing configuration — reconnect if connection-level fields
+                    # (endpoint, app, password, ws client) changed. Workflow IDs are
+                    # resolved per-call via telephony_phone_numbers, so changes to
+                    # them don't require a reconnect.
+                    existing = self._connections[key]
+                    if (
+                        existing.ari_endpoint != conn.ari_endpoint
+                        or existing.app_name != app_name
+                        or existing.app_password != app_password
+                        or existing.stasis_app_name != conn.stasis_app_name
+                        or existing.ws_client_name != ws_client_name
+                        or existing.external_pbx_config != external_pbx_config
+                    ):
+                        logger.info(
+                            f"[ARI Manager] Config {telephony_configuration_id} "
+                            f"changed for org {org_id}, reconnecting..."
+                        )
+                        await existing.stop()
+                        self._connections[key] = conn
+                        await conn.start()
 
         # Stop connections for removed configurations. A config parked by
         # _deactivate lands here too, since it is no longer returned as active.

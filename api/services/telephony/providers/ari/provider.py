@@ -21,6 +21,7 @@ from api.services.telephony.base import (
     ProviderSyncResult,
     TelephonyProvider,
 )
+from api.services.telephony.ari_endpoints import home_of, split_ari_endpoints
 from api.services.telephony.providers.ari.external_pbx import create_adapter
 
 if TYPE_CHECKING:
@@ -56,7 +57,10 @@ class ARIProvider(TelephonyProvider):
         configurations can never claim the same application. Configurations
         written before the split have only ``app_name`` and use it for both.
         """
-        self.ari_endpoint = config.get("ari_endpoint", "").rstrip("/")
+        # P-04: several endpoints on one configuration - the first is this provider's own
+        # (outbound originates); a call's own instance is looked up per channel
+        self.ari_endpoints = split_ari_endpoints(config.get("ari_endpoint", ""))
+        self.ari_endpoint = self.ari_endpoints[0]
         self.app_name = config.get("app_name", "")
         self.app_password = config.get("app_password", "")
         self.stasis_app_name = config.get("stasis_app_name") or self.app_name
@@ -68,6 +72,12 @@ class ARIProvider(TelephonyProvider):
             self.from_numbers = [self.from_numbers]
 
         self.base_url = f"{self.ari_endpoint}/ari"
+
+    def _base_for(self, channel_id: str | None = None, endpoint: str | None = None) -> str:
+        """P-04: the ARI base of the instance a channel lives on (or the endpoint a caller
+        names), this provider's own otherwise."""
+        ep = (endpoint or "").rstrip("/") or home_of(channel_id)
+        return f"{ep}/ari" if ep else self.base_url
 
     def _get_auth(self) -> aiohttp.BasicAuth:
         """Generate BasicAuth for ARI API requests."""
@@ -174,7 +184,7 @@ class ARIProvider(TelephonyProvider):
         if not self.validate_config():
             raise ValueError("ARI provider not properly configured")
 
-        endpoint = f"{self.base_url}/channels/{call_id}"
+        endpoint = f"{self._base_for(call_id)}/channels/{call_id}"
 
         async with aiohttp.ClientSession() as session:
             async with session.get(endpoint, auth=self._get_auth()) as response:
@@ -500,7 +510,8 @@ class ARIProvider(TelephonyProvider):
         app_args = f"transfer,{transfer_id}"
 
         try:
-            endpoint = f"{self.base_url}/channels"
+            # P-04: the leg originates on the instance the call lives on
+            endpoint = f"{self._base_for(endpoint=kwargs.get('svp_ari_endpoint'))}/channels"
             params = {
                 "endpoint": sip_endpoint,
                 "app": self.stasis_app_name,
@@ -561,7 +572,7 @@ class ARIProvider(TelephonyProvider):
 
     async def hangup_channel(self, channel_id: str, reason: str = "normal") -> bool:
         """Hang up an ARI channel."""
-        endpoint = f"{self.base_url}/channels/{channel_id}"
+        endpoint = f"{self._base_for(channel_id)}/channels/{channel_id}"
         params = {"reason_code": reason}
 
         try:
@@ -584,7 +595,7 @@ class ARIProvider(TelephonyProvider):
 
     async def answer_channel(self, channel_id: str) -> bool:
         """Answer an ARI channel."""
-        endpoint = f"{self.base_url}/channels/{channel_id}/answer"
+        endpoint = f"{self._base_for(channel_id)}/channels/{channel_id}/answer"
 
         try:
             async with aiohttp.ClientSession() as session:

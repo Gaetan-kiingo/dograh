@@ -920,6 +920,10 @@ class CustomToolManager:
                             svp_trunk=(
                                 getattr(workflow_run, "initial_context", None) or {}
                             ).get("svp_trunk"),
+                            # P-04: the edge instance the call lives on
+                            svp_ari_endpoint=(
+                                getattr(workflow_run, "initial_context", None) or {}
+                            ).get("svp_ari_endpoint"),
                         )
                     # P-40 amendment (CF-217): listen for the outcome BEFORE dialling - the
                     # edge may refuse the dial at once and publish the failure within
