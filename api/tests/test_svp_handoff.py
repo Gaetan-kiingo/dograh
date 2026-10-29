@@ -280,6 +280,19 @@ def test_p44_the_originated_leg_carries_the_workspaces_application_for_the_edge(
         }  # fmt: skip
         assert handoff.channel_variables("dograh_abc") == {"__SVP_STASIS": "dograh_abc"}
         assert handoff.channel_variables("") == {} and handoff.channel_variables(None) == {}
+        # amended 2026-10-29 (several lines per workspace): the trunk the call came in on
+        # and the dialled number as the caller id ride the leg; the caller id never alone
+        assert handoff.channel_variables(
+            "dograh_abc", "blind", trunk="trunk-0123", caller_id="+41445550011"
+        ) == {
+            "__SVP_STASIS": "dograh_abc",
+            "__SVP_MODE": "blind",
+            "__SVP_TRUNK": "trunk-0123",
+            "__SVP_CALLERID": "+41445550011",
+        }
+        assert handoff.channel_variables("dograh_abc", caller_id="+41445550011") == {
+            "__SVP_STASIS": "dograh_abc"
+        }
 
 
 class _PubSub:

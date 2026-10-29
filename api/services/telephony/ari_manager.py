@@ -884,11 +884,14 @@ class ARIConnection:
             # P-35 amended (Swiss Voice Platform, CF-213, 2026-10-28): the carrier leg's
             # codec as the edge's dialplan set it (SVP_CODEC = CHANNEL(audionativeformat)),
             # so the platform's session says what ran on the wire, not this leg's mu-law
-            svp_codec = ""
+            # (and, P-44 amended 2026-10-29, the trunk it came in on - SVP_TRUNK - so a
+            # handoff goes out on the same line)
+            svp_codec = svp_trunk = ""
             try:
                 svp_codec = await self._get_channel_var(channel_id, "SVP_CODEC")
+                svp_trunk = await self._get_channel_var(channel_id, "SVP_TRUNK")
             except Exception as e:  # noqa: BLE001 - a fact, never a failed call
-                logger.debug(f"[ARI org={self.organization_id}] SVP_CODEC not read: {e}")
+                logger.debug(f"[ARI org={self.organization_id}] SVP_CODEC/SVP_TRUNK not read: {e}")
             workflow_run = await db_client.create_workflow_run(
                 name=f"ARI Inbound {called_number}",
                 workflow_id=inbound_workflow_id,
@@ -903,6 +906,7 @@ class ARIConnection:
                     "telephony_configuration_id": self.telephony_configuration_id,
                     "external_pbx_call": external_pbx_call,
                     **({"svp_codec": svp_codec} if svp_codec else {}),
+                    **({"svp_trunk": svp_trunk} if svp_trunk else {}),
                 },
                 gathered_context={
                     "call_id": call_id,

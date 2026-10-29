@@ -915,6 +915,11 @@ class CustomToolManager:
                             svp_from_number=(
                                 getattr(workflow_run, "initial_context", None) or {}
                             ).get("called_number"),
+                            # P-44 amended: the trunk the call came in on (the edge's
+                            # SVP_TRUNK, read at the answer) - the handoff goes out on it
+                            svp_trunk=(
+                                getattr(workflow_run, "initial_context", None) or {}
+                            ).get("svp_trunk"),
                         )
                     # P-40 amendment (CF-217): listen for the outcome BEFORE dialling - the
                     # edge may refuse the dial at once and publish the failure within

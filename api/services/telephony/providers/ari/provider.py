@@ -487,8 +487,14 @@ class ARIProvider(TelephonyProvider):
         from api.services.pipecat.handoff import channel_variables, svp_dial_string
 
         sip_endpoint = svp_dial_string(destination, kwargs.get("svp_mode"))
-        # P-44: the edge's dialplan learns which workspace this leg is dialled for
-        variables = channel_variables(self.stasis_app_name, kwargs.get("svp_mode"))
+        # P-44: the edge's dialplan learns which workspace this leg is dialled for, and
+        # (amended) which trunk the call came in on, with the dialled number as caller id
+        variables = channel_variables(
+            self.stasis_app_name,
+            kwargs.get("svp_mode"),
+            trunk=kwargs.get("svp_trunk"),
+            caller_id=kwargs.get("svp_from_number"),
+        )
 
         # Build transfer appArgs for event correlation
         app_args = f"transfer,{transfer_id}"

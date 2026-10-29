@@ -59,16 +59,29 @@ def channel_vars_enabled() -> bool:
     return os.environ.get("SVP_ARI_CHANNEL_VARS", "").strip().lower() in ("on", "1", "true")
 
 
-def channel_variables(stasis_app: str | None, mode: str | None = None) -> dict[str, str]:
+def channel_variables(
+    stasis_app: str | None,
+    mode: str | None = None,
+    *,
+    trunk: str | None = None,
+    caller_id: str | None = None,
+) -> dict[str, str]:
     """What the edge's dialplan learns about a leg the runtime originates: the Stasis
     application it dials for (the workspace's trunk and caller id are globals named after
-    it on the edge) and the handoff's mode. The `__` prefix makes Asterisk hand the
-    variables down to the Local channel's dialplan leg and to what it dials."""
+    it on the edge), the handoff's mode and - amended 2026-10-29, several lines per
+    workspace - the trunk the call came in on with the number the caller dialled as the
+    caller id (`SVP_TRUNK` read from the inbound channel at the answer, `called_number`),
+    so the handoff goes out on the line it came in on. The `__` prefix makes Asterisk hand
+    the variables down to the Local channel's dialplan leg and to what it dials."""
     if not channel_vars_enabled() or not stasis_app:
         return {}
     out = {"__SVP_STASIS": str(stasis_app)}
     if mode:
         out["__SVP_MODE"] = str(mode)
+    if trunk:
+        out["__SVP_TRUNK"] = str(trunk)
+        if caller_id:
+            out["__SVP_CALLERID"] = str(caller_id)
     return out
 
 
