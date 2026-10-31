@@ -113,6 +113,12 @@ async def get_effective_ai_model_configuration_for_workflow(
             resolved_config.effective,
             workflow_configurations.get("model_overrides"),
         )
+    # P-46 (ADR-065): the fallback engine beside `llm`, its key fetched with the others
+    from api.services.configuration.resolve import svp_llm_fallback_section
+
+    fallback = svp_llm_fallback_section(workflow_configurations)
+    if fallback is not None:
+        effective = effective.model_copy(update={"llm_fallback": fallback})
     keys = await keys_for_run(
         effective,
         organization_id=organization_id,

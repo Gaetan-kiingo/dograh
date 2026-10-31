@@ -124,16 +124,20 @@ def resolve_effective_config(
             merged = base.model_copy(update=override)
             setattr(effective, section_key, merged)
 
-    # P-46 (Swiss Voice Platform, ADR-065): the platform's fallback engine for this workflow,
-    # only while the in-call fallback is switched on (SVP_LLM_FALLBACK_AFTER_MS)
-    if svp_llm_fallback_after_secs() is not None and isinstance(
-        model_overrides.get("llm_fallback"), dict
-    ):
-        effective.llm_fallback = _build_section_from_override(
-            ServiceType.LLM, model_overrides["llm_fallback"]
-        )
-
     return effective
+
+
+def svp_llm_fallback_section(workflow_configurations: dict | None):
+    """P-46 (Swiss Voice Platform, ADR-065): the platform's fallback engine for this workflow,
+    from the top-level `svp_llm_fallback` - never inside `model_overrides`, which the save
+    turns into the organisation's v2 override and loses unknown sections. None while the
+    in-call fallback is switched off (SVP_LLM_FALLBACK_AFTER_MS unset)."""
+    if svp_llm_fallback_after_secs() is None:
+        return None
+    block = (workflow_configurations or {}).get("svp_llm_fallback")
+    if not isinstance(block, dict):
+        return None
+    return _build_section_from_override(ServiceType.LLM, block)
 
 
 def svp_llm_fallback_after_secs() -> float | None:
