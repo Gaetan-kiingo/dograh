@@ -28,6 +28,9 @@ DOGRAH_DEFAULT_LANGUAGE = "multi"
 
 class EffectiveAIModelConfiguration(BaseModel):
     llm: LLMConfig | None = None
+    # P-46 (Swiss Voice Platform, ADR-065): the next engine of the platform's approved chain,
+    # asked again within a turn when `llm` fails or is silent (SVP_LLM_FALLBACK_AFTER_MS)
+    llm_fallback: LLMConfig | None = None
     stt: STTConfig | None = None
     tts: TTSConfig | None = None
     embeddings: EmbeddingsConfig | None = None

@@ -1096,6 +1096,7 @@ def create_llm_service_from_provider(
     bill_to: str | None = None,
     usage_context: str | None = None,
     language: str | None = None,
+    svp_fallback: dict | None = None,
 ):
     """Create an LLM service from explicit provider/model/api_key.
 
@@ -1116,6 +1117,14 @@ def create_llm_service_from_provider(
             _validate_runtime_service_url(base_url, "base_url")
             kwargs["base_url"] = base_url
         kwargs.update(_llm_stall_guard_kwargs(language))
+        if svp_fallback:
+            # P-46 (ADR-065): the turn asked again of the chain's next engine
+            _validate_runtime_service_url(svp_fallback["base_url"], "base_url")
+            kwargs["svp_fallback"] = svp_fallback
+            logger.info(
+                f"P-46: in-call fallback {svp_fallback['model']} after "
+                f"{svp_fallback['after_secs']}s without a first word"
+            )
         if "gpt-5" in model:
             return OpenAILLMService(
                 api_key=api_key,
@@ -1496,8 +1505,38 @@ def create_llm_service(
         correlation_id=correlation_id,
         usage_context=usage_context,
         language=getattr(getattr(user_config, "stt", None), "language", None),
+        svp_fallback=_svp_llm_fallback(user_config),
         **kwargs,
     )
+
+
+def _svp_llm_fallback(user_config) -> dict | None:
+    """P-46 (Swiss Voice Platform, ADR-065): the call's fallback engine for an OpenAI-compatible
+    primary - the platform's next engine of the same approved chain (`llm_fallback`, compiled
+    per workflow), its key already resolved for the run, its own P-22 parameters. None when
+    the switch is off, there is no fallback, or either engine is not OpenAI-compatible."""
+    from api.services.configuration.resolve import svp_llm_fallback_after_secs
+
+    after = svp_llm_fallback_after_secs()
+    primary = getattr(user_config, "llm", None)
+    fallback = getattr(user_config, "llm_fallback", None)
+    if after is None or primary is None or fallback is None:
+        return None
+    openai = ServiceProviders.OPENAI.value
+    if primary.provider != openai or fallback.provider != openai:
+        return None
+    base_url = getattr(fallback, "base_url", None)
+    api_key = getattr(fallback, "api_key", None)
+    same_engine = fallback.model == primary.model and base_url == getattr(primary, "base_url", None)
+    if not base_url or not api_key or not fallback.model or same_engine:
+        return None
+    return {
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": fallback.model,
+        "extra_body": _llm_extra_body(fallback.model) or {},
+        "after_secs": after,
+    }
 
 
 def create_llm_service_with_model_override(

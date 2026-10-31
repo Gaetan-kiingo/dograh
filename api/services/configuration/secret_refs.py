@@ -34,7 +34,8 @@ PREFIX = "secretref:"
 _ALLOWED_NAME = re.compile(r"^SVP_PROVIDER_[A-Z0-9_]{1,64}$")
 # a key, or a service account's JSON (Google, Swiss Voice Platform C11 - P-13 amendment)
 _SECRET_FIELDS = ("api_key", "credentials")
-_SECTIONS = ("llm", "stt", "tts", "embeddings", "realtime")
+# P-46: the fallback engine's key is fetched for the run like the others
+_SECTIONS = ("llm", "llm_fallback", "stt", "tts", "embeddings", "realtime")
 
 KEY_SERVICE_TIMEOUT = 5.0
 # A run's keys live here from call setup to completion; bounded, and swept by age

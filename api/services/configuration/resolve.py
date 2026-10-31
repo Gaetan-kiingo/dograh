@@ -124,4 +124,26 @@ def resolve_effective_config(
             merged = base.model_copy(update=override)
             setattr(effective, section_key, merged)
 
+    # P-46 (Swiss Voice Platform, ADR-065): the platform's fallback engine for this workflow,
+    # only while the in-call fallback is switched on (SVP_LLM_FALLBACK_AFTER_MS)
+    if svp_llm_fallback_after_secs() is not None and isinstance(
+        model_overrides.get("llm_fallback"), dict
+    ):
+        effective.llm_fallback = _build_section_from_override(
+            ServiceType.LLM, model_overrides["llm_fallback"]
+        )
+
     return effective
+
+
+def svp_llm_fallback_after_secs() -> float | None:
+    """P-46: `SVP_LLM_FALLBACK_AFTER_MS` - how long the primary engine has to give its first
+    chunk before the turn is asked again of the fallback; unset or invalid = stock (none)."""
+    import os
+
+    raw = (os.getenv("SVP_LLM_FALLBACK_AFTER_MS") or "").strip()
+    try:
+        value = float(raw) / 1000 if raw else None
+    except ValueError:
+        return None
+    return value if value and value > 0 else None
