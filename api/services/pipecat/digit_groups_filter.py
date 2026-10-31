@@ -65,8 +65,14 @@ class DigitGroupsTextFilter(BaseTextFilter):
 
 
 def svp_text_filters() -> list[BaseTextFilter]:
-    """The platform's filters for every TTS service (after the stock XML tag filter)."""
+    """The platform's filters for every TTS service (after the stock XML tag filter): what is
+    not for the caller dropped first (P-47), then digit groups said as the owner's rule says."""
+    from api.services.pipecat.spoken_text_guard import SpokenTextGuardFilter, spoken_text_guard_on
+
+    filters: list[BaseTextFilter] = []
+    if spoken_text_guard_on():
+        filters.append(SpokenTextGuardFilter())
     mode = (os.getenv("SVP_TTS_DIGIT_GROUPS") or "").strip().lower()
     if mode in ("comma", "digits"):
-        return [DigitGroupsTextFilter(mode)]
-    return []
+        filters.append(DigitGroupsTextFilter(mode))
+    return filters
