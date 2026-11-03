@@ -38,6 +38,7 @@ from api.services.workflow.tools.transfer_resolver import (
     TransferResolutionError,
     resolve_transfer_config,
 )
+from api.services.workflow.tool_bindings import apply_bindings, bindings_for, bound_schema
 from api.utils.template_renderer import render_template
 
 if TYPE_CHECKING:
@@ -228,14 +229,19 @@ class CustomToolManager:
                 function_name = raw_schema["function"]["name"]
                 self.svp_write_functions[function_name] = is_svp_write_tool(tool)
 
+                # P-49 (ADR-074): a bound parameter is the platform's to fill - optional
+                # to the model, told to leave it out
+                properties, required = bound_schema(
+                    raw_schema["function"]["parameters"].get("properties", {}),
+                    raw_schema["function"]["parameters"].get("required", []),
+                    bindings_for(await self._svp_configurations(), tool.tool_uuid),
+                )
                 # Convert to FunctionSchema object for compatibility with update_llm_context
                 func_schema = get_function_schema(
                     function_name,
                     raw_schema["function"]["description"],
-                    properties=raw_schema["function"]["parameters"].get(
-                        "properties", {}
-                    ),
-                    required=raw_schema["function"]["parameters"].get("required", []),
+                    properties=properties,
+                    required=required,
                 )
                 schemas.append(func_schema)
 
@@ -410,6 +416,21 @@ class CustomToolManager:
 
         self._engine.llm.register_function("safe_calculator", calculate_func)
 
+    async def _svp_configurations(self) -> dict:
+        """The run's configurations, read once (P-25's filler, P-49's bindings)."""
+        if getattr(self._engine, "_svp_configurations", None) is None:
+            self._engine._svp_configurations = {}
+            try:
+                self._engine._svp_configurations = (
+                    await db_client.get_workflow_run_configurations(
+                        self._engine._workflow_run_id, await self.get_organization_id()
+                    )
+                    or {}
+                )
+            except Exception as e:  # a tool must never fail on its configuration
+                logger.warning(f"P-49: could not read the run's configurations: {e}")
+        return self._engine._svp_configurations
+
     def _create_http_tool_handler(self, tool: Any, function_name: str):
         """Create a handler function for an HTTP API tool.
 
@@ -505,10 +526,34 @@ class CustomToolManager:
                     frame.svp_progress = True
                     await self._engine.task.queue_frame(frame)
 
+                # P-49 (ADR-074): the bound parameters from the call's variables, never
+                # from the model; a value missing on both sides stops here, named
+                svp_bound = bindings_for(await self._svp_configurations(), tool.tool_uuid)
+                arguments, missing = apply_bindings(
+                    svp_bound,
+                    function_call_params.arguments,
+                    self._engine._gathered_context.get("extracted_variables"),
+                    self._engine._call_context_vars,
+                )
+                if missing:
+                    logger.info(f"P-49: '{function_name}' not called - missing {missing}")
+                    await function_call_params.result_callback(
+                        {
+                            "status": "error",
+                            "error": "missing: " + ", ".join(missing)
+                            + " - ask the caller for it, then call again",
+                        }
+                    )
+                    return
+                if svp_bound:
+                    logger.info(
+                        f"P-49: '{function_name}' took {len(svp_bound)} parameter(s) from "
+                        "the call's variables"
+                    )
                 result = await with_filler(
                     execute_http_tool(
                         tool=tool,
-                        arguments=function_call_params.arguments,
+                        arguments=arguments,
                         call_context_vars={
                             **(self._engine._call_context_vars or {}),
                             "svp_call": svp_call,
