@@ -30,6 +30,17 @@ _SIGNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("the runtime's kick-off", re.compile(
         r"\blet'?s begin\b|\bthe caller is on the line\b", re.IGNORECASE
     )),
+    # P-47 amended 2026-11-03 (the owner's first call on the beta): the model narrating the end
+    # of the call before its transition - « Le client n'a pas de demande supplémentaire à
+    # noter. Je vais terminer l'appel. » - the closing step says goodbye itself
+    ("a narrated end of the call", re.compile(
+        r"\bje vais (?:terminer|mettre fin à|clore|clôturer) (?:l[’']appel|la conversation)"
+        r"|\bje (?:termine|mets fin à) (?:l[’']appel|la conversation)"
+        r"|\bi(?:'| wi)ll (?:end|close|terminate) the call\b|\bending the call now\b"
+        r"|\bich (?:beende|werde) (?:das Gespräch|den Anruf)(?: beenden)?\b"
+        r"|\b(?:termino|chiudo|terminerò|chiuderò) la (?:chiamata|telefonata)\b",
+        re.IGNORECASE,
+    )),
     ("the caller in the third person", re.compile(
         r"\bl[’']utilisat(?:eur|rice)\b|\bthe user\b|\b(?:der|des|dem|den) Benutzers?\b"
         r"|\bl[’']utente\b",

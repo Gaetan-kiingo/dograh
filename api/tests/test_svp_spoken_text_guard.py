@@ -21,6 +21,12 @@ NOT_FOR_THE_CALLER = [
     "Der Benutzer möchte einen Termin.",
     "L'utente vuole un appuntamento.",
     "[ALREADY KNOWN] nom: (not given yet)",
+    # the end of the call narrated before the transition (2026-11-03, the beta's run 1)
+    "Le client n'a pas de demande supplémentaire à noter. Je vais terminer l'appel.",
+    "Je mets fin à l'appel.",
+    "The caller has no further questions. I will end the call.",
+    "Ich beende das Gespräch.",
+    "Termino la chiamata.",
 ]
 
 SPEECH = [
@@ -32,6 +38,8 @@ SPEECH = [
     "Can I help you with anything else?",
     "Je vous propose lundi à 9 h ou mardi à 14 h 30.",
     "Pour toute question, écrivez à info@driing.ch.",
+    "Je vous remercie pour votre appel. Bon après-midi et à bientôt.",
+    "Souhaitez-vous terminer la réservation maintenant ?",
 ]
 
 
