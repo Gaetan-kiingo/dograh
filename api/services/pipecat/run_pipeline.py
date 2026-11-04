@@ -1085,6 +1085,14 @@ async def _run_pipeline_impl(
                 engine=engine,
                 run_id=workflow_run_id,
             )
+        # P-50 EXPERIMENT: the runtime retrieves the documents' passages itself
+        runtime_retrieval = None
+        from api.services.pipecat import runtime_retrieval as svp_runtime_retrieval
+
+        if svp_runtime_retrieval.enabled() and svp_runtime_retrieval.steps_of(run_configs):
+            runtime_retrieval = svp_runtime_retrieval.RetrievalProcessor(
+                engine=engine, run_id=workflow_run_id
+            )
         # P-40 (ADR-060): the keypad shortcut to a person, when the agent has a handoff
         handoff_keypad = None
         from api.services.pipecat import handoff as svp_handoff
@@ -1111,6 +1119,7 @@ async def _run_pipeline_impl(
             voicemail_detector=voicemail_detector,
             recording_router=recording_router,
             language_switch=language_switch,
+            runtime_retrieval=runtime_retrieval,
             handoff_keypad=handoff_keypad,
         )
 

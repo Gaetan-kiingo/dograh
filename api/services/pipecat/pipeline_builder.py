@@ -38,6 +38,7 @@ def build_pipeline(
     voicemail_detector=None,
     recording_router=None,
     language_switch=None,
+    runtime_retrieval=None,
     handoff_keypad=None,
 ):
     """Build the main pipeline with all components.
@@ -73,6 +74,12 @@ def build_pipeline(
     if language_switch is not None:
         logger.info("P-07: adding the language switch to the pipeline")
         processors.append(language_switch)
+
+    # P-50 EXPERIMENT (Swiss Voice Platform): the documents' retrieval on the caller's final
+    # words, by the runtime - right after the recogniser, before the aggregator runs the model
+    if runtime_retrieval is not None:
+        logger.info("P-50: adding the runtime retrieval to the pipeline")
+        processors.append(runtime_retrieval)
 
     # P-40 (Swiss Voice Platform, ADR-060): the keypad digit that asks for a person
     if handoff_keypad is not None:
