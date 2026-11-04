@@ -226,7 +226,7 @@ class CustomToolManager:
 
                 raw_schema = tool_to_function_schema(tool)
                 function_name = raw_schema["function"]["name"]
-                # P-50 experiment: where the runtime retrieves, the lookup STAYS in the model's
+                # P-50: where the runtime retrieves, the lookup STAYS in the model's
                 # list - taking it out left the kick-off with the end transition as its only
                 # function, and DeepSeek V4 Flash then opened the call with its reasoning
                 # marks and ended it at once (runs 2302, 2303, 2305, 2306 of 2026-11-04); a

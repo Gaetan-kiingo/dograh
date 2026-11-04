@@ -1,5 +1,6 @@
-"""P-50 EXPERIMENT (Swiss Voice Platform, branch swiss/retrieval-test, 2026-11-04; ADR-034):
-the documents' retrieval done by the runtime, not decided by the model.
+"""P-50 (Swiss Voice Platform, ADR-002, ADR-034 amendment of 2026-11-04 - adopted by the owner
+after his calls on the beta): the documents' retrieval done by the runtime, not decided by
+the model.
 
 Stock: a step with a long document carries the `lookup_knowledge_*` tool; the model decides
 to call it, writes a query, waits, and runs again to answer - two model passes (about 1.8 s
@@ -17,7 +18,7 @@ run whose configurations carry ``svp_retrieval`` (the platform: ``{"steps": "all
 - the lookup function is left out of the model's list on those steps, so it never looks up
   by itself.
 
-Unset = stock. Measured on the Mac before any decision (the experiment's evidence file)."""
+Unset = stock. Measured on the Mac and the beta (docs/evidence/latency/p50-runtime-retrieval-2026-11-04.md)."""
 
 from __future__ import annotations
 

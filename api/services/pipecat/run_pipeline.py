@@ -1085,7 +1085,7 @@ async def _run_pipeline_impl(
                 engine=engine,
                 run_id=workflow_run_id,
             )
-        # P-50 EXPERIMENT: the runtime retrieves the documents' passages itself
+        # P-50 (ADR-034 amendment): the runtime retrieves the documents' passages itself
         runtime_retrieval = None
         from api.services.pipecat import runtime_retrieval as svp_runtime_retrieval
 

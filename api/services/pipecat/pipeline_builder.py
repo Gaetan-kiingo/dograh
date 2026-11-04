@@ -75,7 +75,7 @@ def build_pipeline(
         logger.info("P-07: adding the language switch to the pipeline")
         processors.append(language_switch)
 
-    # P-50 EXPERIMENT (Swiss Voice Platform): the documents' retrieval on the caller's final
+    # P-50 (Swiss Voice Platform, ADR-034 amendment): the documents' retrieval on the caller's final
     # words, by the runtime - right after the recogniser, before the aggregator runs the model
     if runtime_retrieval is not None:
         logger.info("P-50: adding the runtime retrieval to the pipeline")
