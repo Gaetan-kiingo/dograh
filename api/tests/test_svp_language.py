@@ -175,6 +175,34 @@ async def test_p07_a_mis_tagged_transcript_is_held_when_its_words_disagree(monke
         assert proc.current == "fr" and proc.switches == ["de", "fr"]
 
 
+async def test_p07_the_announcement_is_withdrawn_whatever_the_next_transcripts_tag(monkeypatch):
+    """Run 21 (2026-11-04, Cartesia Ink): every German sentence came tagged « en » with words
+    the word rule could not place, the withdrawal case was never reached and the model opened
+    every reply with « Ich antworte Ihnen gern auf Deutsch ». The announcement leaves the
+    instructions on the caller's next utterance, whatever its tag."""
+    monkeypatch.setenv("SVP_LANGUAGE_SWITCH_CHECK_TEXT", "on")
+    monkeypatch.setenv("SVP_LANGUAGE_SWITCH_MIN_WORDS", "4")
+    engine = _Engine()
+    proc, _ = _processor(engine)
+    with patch("api.services.svp_call_events.notify"):
+        await proc.process_frame(
+            TranscriptionFrame("können Sie Deutsch sprechen bitte", "u", "t", language="en"),
+            FrameDirection.DOWNSTREAM,
+        )
+        assert proc.current == "de" and engine.cleared == 0
+        # a garbled German sentence Ink tagged English: the switch holds, the announcement goes
+        await proc.process_frame(
+            TranscriptionFrame("Vobelden meine Daten gehostet", "u", "t", language="en"),
+            FrameDirection.DOWNSTREAM,
+        )
+        assert proc.current == "de" and proc.switches == ["de"] and engine.cleared == 1
+        await proc.process_frame(
+            TranscriptionFrame("Voben get es in der Beta", "u", "t", language="en"),
+            FrameDirection.DOWNSTREAM,
+        )
+        assert engine.cleared == 1  # once
+
+
 async def test_p07_a_language_the_agent_does_not_answer_in_is_left_alone():
     engine = _Engine()
     proc, pushed = _processor(engine)

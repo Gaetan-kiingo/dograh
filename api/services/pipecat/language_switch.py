@@ -151,6 +151,7 @@ class LanguageSwitchProcessor(FrameProcessor):
             else:
                 target = heard
                 verdict = None
+            switched = False
             if words and target and target != self._current and target in self._languages:
                 floor = min_words()
                 if words < floor:
@@ -165,14 +166,22 @@ class LanguageSwitchProcessor(FrameProcessor):
                         + f": switches to {target}; run {self._run_id}"
                     )
                     await self._switch_to(target)
+                    switched = True
             elif words and verdict and heard and heard != self._current:
                 logger.info(
                     f"P-07: a {words}-word transcript tagged {heard} held - its words say "
                     f"{verdict}; run {self._run_id}"
                 )
-            elif self._announce_pending and frame.text.strip() and self._engine is not None:
+            if (
+                self._announce_pending
+                and not switched
+                and frame.text.strip()
+                and self._engine is not None
+            ):
                 # the reply after the switch carried the announcement; from this utterance
-                # on the instructions say the language only
+                # on the instructions say the language only - whatever the transcript's tag
+                # (Cartesia Ink tags a German sentence « en » and the owner's run 21 of
+                # 2026-11-04 heard the announcement before every reply; P-07 amended)
                 self._announce_pending = False
                 await self._engine.clear_language_announcement()
         await self.push_frame(frame, direction)
