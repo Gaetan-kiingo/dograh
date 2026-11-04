@@ -38,14 +38,7 @@ from api.services.workflow.tools.transfer_resolver import (
     TransferResolutionError,
     resolve_transfer_config,
 )
-from api.services.workflow.tool_bindings import (
-    EXTRACTION_WAIT_SECONDS,
-    apply_bindings,
-    bindings_for,
-    bound_schema,
-    confirm_argument,
-    remember_proposal,
-)
+from api.services.workflow.tool_bindings import apply_bindings, bindings_for, bound_schema
 from api.utils.template_renderer import render_template
 
 if TYPE_CHECKING:
@@ -534,9 +527,7 @@ class CustomToolManager:
                     await self._engine.task.queue_frame(frame)
 
                 # P-49 (ADR-074): the bound parameters from the call's variables, never
-                # from the model; a value still being extracted is waited for (the step's
-                # values are extracted in the background when it is left); a value missing
-                # on both sides stops here, named
+                # from the model; a value missing on both sides stops here, named
                 svp_bound = bindings_for(await self._svp_configurations(), tool.tool_uuid)
                 arguments, missing = apply_bindings(
                     svp_bound,
@@ -544,21 +535,6 @@ class CustomToolManager:
                     self._engine._gathered_context.get("extracted_variables"),
                     self._engine._call_context_vars,
                 )
-                if missing and getattr(self._engine, "_pending_extraction_tasks", None):
-                    started = time.monotonic()
-                    await self._engine._await_pending_extractions(
-                        timeout=EXTRACTION_WAIT_SECONDS
-                    )
-                    logger.info(
-                        f"P-49: '{function_name}' waited {time.monotonic() - started:.2f}s "
-                        f"for the extraction of {missing}"
-                    )
-                    arguments, missing = apply_bindings(
-                        svp_bound,
-                        function_call_params.arguments,
-                        self._engine._gathered_context.get("extracted_variables"),
-                        self._engine._call_context_vars,
-                    )
                 if missing:
                     logger.info(f"P-49: '{function_name}' not called - missing {missing}")
                     await function_call_params.result_callback(
@@ -574,13 +550,6 @@ class CustomToolManager:
                         f"P-49: '{function_name}' took {len(svp_bound)} parameter(s) from "
                         "the call's variables"
                     )
-                # P-49 amended: the confirmation token is the runtime's - the model says
-                # « yes », the proposal it answered is remembered per tool
-                if getattr(self._engine, "_svp_proposals", None) is None:
-                    self._engine._svp_proposals = {}
-                arguments = confirm_argument(
-                    self._engine._svp_proposals, tool.tool_uuid, arguments
-                )
                 result = await with_filler(
                     execute_http_tool(
                         tool=tool,
@@ -595,8 +564,6 @@ class CustomToolManager:
                     _speak_filler,
                     filler_text(config, self._engine._svp_filler),
                 )
-
-                remember_proposal(self._engine._svp_proposals, tool.tool_uuid, result)
 
                 # P-32 (ADR-002): a write tool of the step has answered - the step's
                 # transitions are given back before the model reads the answer
