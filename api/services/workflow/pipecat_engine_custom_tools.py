@@ -226,15 +226,18 @@ class CustomToolManager:
 
                 raw_schema = tool_to_function_schema(tool)
                 function_name = raw_schema["function"]["name"]
-                # P-50 experiment: where the runtime retrieves, the model has no lookup to call
+                # P-50 experiment: where the runtime retrieves, the lookup STAYS in the model's
+                # list - taking it out left the kick-off with the end transition as its only
+                # function, and DeepSeek V4 Flash then opened the call with its reasoning
+                # marks and ended it at once (runs 2302, 2303, 2305, 2306 of 2026-11-04); a
+                # lookup the model still makes shows in the log as « HTTP Tool EXECUTED »
                 from api.services.pipecat import runtime_retrieval
 
                 if runtime_retrieval.is_lookup_tool(function_name) and runtime_retrieval.covers(
                     await self._svp_configurations(),
                     getattr(getattr(self._engine, "_current_node", None), "id", None),
                 ):
-                    logger.info(f"P-50: '{function_name}' kept from the model's list")
-                    continue
+                    logger.info(f"P-50: '{function_name}' offered beside the runtime's retrieval")
                 self.svp_write_functions[function_name] = is_svp_write_tool(tool)
 
                 # Convert to FunctionSchema object for compatibility with update_llm_context
