@@ -107,9 +107,13 @@ def test_p50_the_passages_become_one_message_at_the_end_of_the_request():
     assert runtime_retrieval.format_passages({"status": "error"}) is None
     params = {"model": "m", "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]}
     with_extra = svp_with_turn_context(params, extra)
-    assert with_extra["messages"][:2] == params["messages"]  # the prefix untouched
-    assert with_extra["messages"][-1] == {"role": "system", "content": extra}
+    assert with_extra["messages"][0] == params["messages"][0]  # the prefix untouched
+    assert with_extra["messages"][-1] == {"role": "user", "content": "u\n\n" + extra}
+    assert params["messages"][-1]["content"] == "u"  # the stored conversation untouched
     assert svp_with_turn_context(params, None) is params
+    assert svp_with_turn_context({"messages": [{"role": "system", "content": "s"}]}, extra)["messages"] == [
+        {"role": "system", "content": "s"}
+    ]
     assert runtime_retrieval.query_of("Comment puis-je vous aider ?", "  et le samedi ? ") == (
         "Comment puis-je vous aider ? et le samedi ?"
     )
