@@ -22,8 +22,8 @@ copied them again by hand. With `SVP_TOOL_BINDINGS=on`:
   extraction - the step's values are extracted in the background when it is left);
 - the confirmation token is the runtime's: the proposal a write tool answered is
   remembered per tool and call, the model's `confirm` says « yes » (any word) and the
-  runtime puts the token in - 80 characters the model never sees nor writes
-  (`remember_proposal` hands the model the proposal without it, `confirm_argument`).
+  runtime puts the token in - 80 characters the model no longer writes (`confirm_argument`,
+  `remember_proposal`).
 Unset = stock: the bindings are ignored and the model's arguments go as they are.
 """
 
@@ -75,30 +75,18 @@ def bound_schema(
     return out, [r for r in required if r not in bindings]
 
 
-CONFIRM_MESSAGE = (
-    "Nothing was done yet. Read `read_back` to the caller word for word; only after an "
-    "explicit yes call this tool again with confirm: 'yes'."
-)
-
-
-def remember_proposal(memory: dict[str, str], tool_uuid: str | None, result: Any) -> Any:
+def remember_proposal(memory: dict[str, str], tool_uuid: str | None, result: Any) -> None:
     """Keep the confirmation token a write tool's proposal answered (the executor's result:
-    {"status": "success", "data": {"status": "proposal", "confirm": ...}}) and hand the model
-    a result without it - on the owner's run 11 (2026-11-04) the model copied the token
-    from the result, 1.2 s of streaming, although asked for a word. Any other answer of
-    that tool forgets the proposal."""
+    {"status": "success", "data": {"status": "proposal", "confirm": ...}}); any other
+    answer of that tool forgets it."""
     if not bindings_on() or not tool_uuid:
-        return result
+        return
     data = result.get("data") if isinstance(result, dict) else None
     token = data.get(CONFIRM) if isinstance(data, dict) and data.get("status") == "proposal" else None
     if isinstance(token, str) and token:
         memory[str(tool_uuid)] = token
-        shown = {**data, CONFIRM: "yes"}
-        if "message" in shown:
-            shown["message"] = CONFIRM_MESSAGE
-        return {**result, "data": shown}
-    memory.pop(str(tool_uuid), None)
-    return result
+    else:
+        memory.pop(str(tool_uuid), None)
 
 
 def confirm_argument(
