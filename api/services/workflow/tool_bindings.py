@@ -11,12 +11,19 @@ values - instead of being written by the model:
 Why: on the owner's booking call (2026-11-03) the model spent 1.8 s writing the booking's
 fields - date, time, name, number - that the caller had already given and confirmed, and
 copied them again by hand. With `SVP_TOOL_BINDINGS=on`:
-- the function schema the model sees keeps a bound parameter as OPTIONAL, described as
-  filled by the platform, so the model leaves it out (and may still give it when it must);
-- at the call, the bound value from the extracted variables (or the call's context for the
-  call's own values) replaces whatever the model wrote; a datetime variable is split into
-  its date or time part; a value that is missing on both sides stops the call before any
-  request leaves, with an error naming the field, so the model asks the caller.
+- a bound parameter is NOT in the function schema the model sees (ADR-074 amendment of
+  2026-11-04: kept optional and told « leave it out », DeepSeek wrote every one of them
+  anyway on the owner's two calls - 1.1 s and 1.75 s of arguments the runtime then
+  overwrote);
+- at the call, the bound value comes from the extracted variables (or the call's context
+  for the call's own values); a datetime variable is split into its date or time part; a
+  value missing on both sides stops the call before any request leaves, with an error
+  naming the field, so the model asks the caller (the handler first waits for a pending
+  extraction - the step's values are extracted in the background when it is left);
+- the confirmation token is the runtime's: the proposal a write tool answered is
+  remembered per tool and call, the model's `confirm` says « yes » (any word) and the
+  runtime puts the token in - 80 characters the model no longer writes (`confirm_argument`,
+  `remember_proposal`).
 Unset = stock: the bindings are ignored and the model's arguments go as they are.
 """
 
@@ -30,6 +37,7 @@ from typing import Any
 from loguru import logger
 
 CALL_VARIABLES = ("caller_number",)
+EXTRACTION_WAIT_SECONDS = 3.0  # a step's values are extracted when it is left, in the background
 _ISO = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2})?)?")
 
 
@@ -46,20 +54,58 @@ def bindings_for(configurations: dict[str, Any] | None, tool_uuid: str | None) -
     return {str(k): dict(v) for k, v in bound.items()} if isinstance(bound, dict) else {}
 
 
+CONFIRM = "confirm"
+CONFIRM_DESCRIPTION = (
+    "Leave empty to get the read-back. Only after the caller explicitly said yes to the "
+    "read-back, call again with 'yes' here."
+)
+_TOKEN = re.compile(r"^p\d+\.[^.]+\.[^.]+\.[0-9a-f]{16,}\.")
+
+
 def bound_schema(
     properties: dict[str, Any], required: list[str], bindings: dict[str, dict]
 ) -> tuple[dict[str, Any], list[str]]:
-    """The model's view of a tool: a bound parameter stays, optional, told to be left out."""
-    if not bindings:
+    """The model's view of a tool: a bound parameter is gone - the platform fills it - and
+    the confirmation asks for a word, not the token."""
+    if not bindings_on():
         return properties, required
-    out = {}
-    for name, prop in properties.items():
-        binding = bindings.get(name)
-        if binding:
-            label = str(binding.get("label") or binding.get("variable") or name)
-            prop = {**prop, "description": f"Filled by the platform ({label}); leave it out."}
-        out[name] = prop
+    out = {name: prop for name, prop in properties.items() if name not in bindings}
+    if CONFIRM in out and isinstance(out[CONFIRM], dict):
+        out[CONFIRM] = {**out[CONFIRM], "description": CONFIRM_DESCRIPTION}
     return out, [r for r in required if r not in bindings]
+
+
+def remember_proposal(memory: dict[str, str], tool_uuid: str | None, result: Any) -> None:
+    """Keep the confirmation token a write tool's proposal answered (the executor's result:
+    {"status": "success", "data": {"status": "proposal", "confirm": ...}}); any other
+    answer of that tool forgets it."""
+    if not bindings_on() or not tool_uuid:
+        return
+    data = result.get("data") if isinstance(result, dict) else None
+    token = data.get(CONFIRM) if isinstance(data, dict) and data.get("status") == "proposal" else None
+    if isinstance(token, str) and token:
+        memory[str(tool_uuid)] = token
+    else:
+        memory.pop(str(tool_uuid), None)
+
+
+def confirm_argument(
+    memory: dict[str, str], tool_uuid: str | None, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """The model's `confirm` as the gateway takes it: empty stays a proposal, a token the
+    model copied is kept, any other word becomes the remembered token - or empty (a new
+    proposal) when no proposal was answered yet."""
+    if not bindings_on() or CONFIRM not in (arguments or {}):
+        return dict(arguments or {})
+    out = dict(arguments)
+    value = out.get(CONFIRM)
+    if not isinstance(value, str) or not value.strip():
+        return out
+    if _TOKEN.match(value.strip()):
+        return out
+    token = memory.get(str(tool_uuid)) if tool_uuid else None
+    out[CONFIRM] = token or ""
+    return out
 
 
 def _convert(value: Any, binding: dict) -> Any | None:
