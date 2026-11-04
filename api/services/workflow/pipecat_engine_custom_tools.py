@@ -419,6 +419,21 @@ class CustomToolManager:
 
         self._engine.llm.register_function("safe_calculator", calculate_func)
 
+    async def _svp_configurations(self) -> dict:
+        """P-50 experiment: the run's configurations, read once (as P-49 read them)."""
+        if getattr(self._engine, "_svp_configurations", None) is None:
+            self._engine._svp_configurations = {}
+            try:
+                self._engine._svp_configurations = (
+                    await db_client.get_workflow_run_configurations(
+                        self._engine._workflow_run_id, await self.get_organization_id()
+                    )
+                    or {}
+                )
+            except Exception as e:  # a tool must never fail on its configuration
+                logger.warning(f"P-50: could not read the run's configurations: {e}")
+        return self._engine._svp_configurations
+
     def _create_http_tool_handler(self, tool: Any, function_name: str):
         """Create a handler function for an HTTP API tool.
 
