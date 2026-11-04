@@ -64,21 +64,25 @@ def test_p49_the_confirmation_token_is_the_runtimes(monkeypatch):
     # before any proposal, a word is an empty confirm: the gateway proposes
     assert confirm_argument(memory, "uuid-book", {"date": "x", "confirm": "yes"}) == {"date": "x", "confirm": ""}
     assert confirm_argument(memory, "uuid-book", {"date": "x", "confirm": ""}) == {"date": "x", "confirm": ""}
-    remember_proposal(memory, "uuid-book", PROPOSAL)
+    shown = remember_proposal(memory, "uuid-book", {**PROPOSAL, "data": {**PROPOSAL["data"], "message": "…this `confirm` value."}})
     assert memory == {"uuid-book": TOKEN}
+    # the model never sees the token: the proposal it reads says « yes »
+    assert shown["data"]["confirm"] == "yes" and shown["data"]["read_back"] == "…"
+    assert "'yes'" in shown["data"]["message"] and TOKEN not in str(shown)
     assert confirm_argument(memory, "uuid-book", {"confirm": "oui"}) == {"confirm": TOKEN}
     assert confirm_argument(memory, "uuid-book", {"confirm": TOKEN}) == {"confirm": TOKEN}  # copied
     assert confirm_argument(memory, "uuid-other", {"confirm": "yes"}) == {"confirm": ""}  # another tool
     assert confirm_argument(memory, "uuid-book", {"reason": "r"}) == {"reason": "r"}  # no confirm
     # the write's answer forgets the proposal
-    remember_proposal(memory, "uuid-book", {"status": "success", "data": {"status": "success"}})
+    done = {"status": "success", "data": {"status": "success", "booked": True}}
+    assert remember_proposal(memory, "uuid-book", done) == done
     assert memory == {}
 
 
 def test_p49_off_the_confirmation_goes_as_the_model_wrote_it(monkeypatch):
     monkeypatch.delenv("SVP_TOOL_BINDINGS", raising=False)
     memory: dict[str, str] = {}
-    remember_proposal(memory, "uuid-book", PROPOSAL)
+    assert remember_proposal(memory, "uuid-book", PROPOSAL) == PROPOSAL
     assert memory == {}
     assert confirm_argument(memory, "uuid-book", {"confirm": "yes"}) == {"confirm": "yes"}
 

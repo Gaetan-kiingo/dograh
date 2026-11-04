@@ -596,7 +596,7 @@ class CustomToolManager:
                     filler_text(config, self._engine._svp_filler),
                 )
 
-                remember_proposal(self._engine._svp_proposals, tool.tool_uuid, result)
+                result = remember_proposal(self._engine._svp_proposals, tool.tool_uuid, result)
 
                 # P-32 (ADR-002): a write tool of the step has answered - the step's
                 # transitions are given back before the model reads the answer
