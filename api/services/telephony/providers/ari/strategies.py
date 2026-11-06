@@ -8,6 +8,12 @@ from typing import TYPE_CHECKING, Any, Dict
 from loguru import logger
 from pipecat.serializers.call_strategies import HangupStrategy, TransferStrategy
 
+from api.services.telephony.ari_endpoints import (
+    ari_endpoints_enabled,
+    home_of,
+    split_ari_endpoints,
+)
+
 if TYPE_CHECKING:
     from .external_pbx import ExternalPBXAdapter
 
@@ -222,6 +228,12 @@ class ARIHangupStrategy(HangupStrategy):
                     "Cannot hang up Asterisk channel: missing channel_id or ari_endpoint"
                 )
                 return False
+            if ari_endpoints_enabled():
+                # P-04 amended (2026-11-06, CF-272): a configuration naming several
+                # instances is a comma-separated list, never one url - the hangup goes to
+                # the instance the channel entered on, else the first
+                endpoints = split_ari_endpoints(ari_endpoint)
+                ari_endpoint = home_of(channel_id) or (endpoints[0] if endpoints else ari_endpoint)
 
             # The external PBX owns the real customer leg. End it before the
             # local ARI leg so its conference teardown cannot race our SIP BYE.

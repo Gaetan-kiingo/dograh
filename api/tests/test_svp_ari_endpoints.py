@@ -54,3 +54,60 @@ def test_p04_a_channel_is_served_by_the_instance_it_entered_on():
     with mock.patch.dict(os.environ, {"SVP_ARI_ENDPOINTS": ""}):
         ari_endpoints.remember_home("chan-2", "http://b:8088")  # stock: nothing remembered
         assert ari_endpoints.home_of("chan-2") is None
+
+
+def test_p04_the_hangup_reaches_the_instance_the_channel_entered_on(monkeypatch):
+    """CF-272 (the beta, 2026-11-06): the hangup strategy built one url from the whole
+    endpoint list and aiohttp refused it. The channel's home instance, else the first."""
+    import asyncio
+
+    import aiohttp
+
+    from api.services.telephony.providers.ari.strategies import ARIHangupStrategy
+
+    calls: list[str] = []
+
+    class FakeResponse:
+        status = 204
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def text(self):
+            return ""
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def delete(self, url, auth=None):
+            calls.append(url)
+            return FakeResponse()
+
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **k: FakeSession())
+    strategy = ARIHangupStrategy()
+
+    async def _no_pbx(channel_id):
+        return None
+
+    monkeypatch.setattr(strategy, "_terminate_external_pbx_if_any", _no_pbx)
+    context = {
+        "channel_id": "chan-9",
+        "ari_endpoint": "http://a:8088,http://b:8088",
+        "app_name": "svp",
+        "app_password": "x",
+    }
+    with mock.patch.dict(os.environ, {"SVP_ARI_ENDPOINTS": "on"}):
+        ari_endpoints.remember_home("chan-9", "http://b:8088")
+        assert asyncio.run(strategy.execute_hangup(context)) is True
+        assert calls == ["http://b:8088/ari/channels/chan-9"]
+        ari_endpoints.forget_home("chan-9")
+        calls.clear()
+        assert asyncio.run(strategy.execute_hangup(context)) is True
+        assert calls == ["http://a:8088/ari/channels/chan-9"]
