@@ -96,9 +96,15 @@ def test_p46_the_service_gets_the_fallback_with_its_own_parameters(monkeypatch):
     assert fallback == {
         "base_url": FALLBACK["base_url"], "api_key": "i", "model": "moonshotai/Kimi-K2.6",
         "extra_body": {"chat_template_kwargs": {"thinking": False}, "k": 1}, "after_secs": 1.5,
+        "stall_secs": None,  # SVP_LLM_STREAM_STALL_MS unset: no watch between chunks
     }  # fmt: skip
     service = service_factory.create_llm_service(resolved)
     assert service._svp_fallback["model"] == "moonshotai/Kimi-K2.6"
+    # CF-137 (F11, 2026-11-06): the limit between chunks once the answer has begun
+    monkeypatch.setenv("SVP_LLM_STREAM_STALL_MS", "8000")
+    assert service_factory._svp_llm_fallback(resolved)["stall_secs"] == 8.0
+    monkeypatch.setenv("SVP_LLM_STREAM_STALL_MS", "nonsense")
+    assert service_factory._svp_llm_fallback(resolved)["stall_secs"] is None
 
 
 def test_p46_switched_off_or_the_same_engine_means_no_fallback(monkeypatch):

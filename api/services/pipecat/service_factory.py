@@ -1515,7 +1515,10 @@ def _svp_llm_fallback(user_config) -> dict | None:
     primary - the platform's next engine of the same approved chain (`llm_fallback`, compiled
     per workflow), its key already resolved for the run, its own P-22 parameters. None when
     the switch is off, there is no fallback, or either engine is not OpenAI-compatible."""
-    from api.services.configuration.resolve import svp_llm_fallback_after_secs
+    from api.services.configuration.resolve import (
+        svp_llm_fallback_after_secs,
+        svp_llm_stream_stall_secs,
+    )
 
     after = svp_llm_fallback_after_secs()
     primary = getattr(user_config, "llm", None)
@@ -1536,6 +1539,8 @@ def _svp_llm_fallback(user_config) -> dict | None:
         "model": fallback.model,
         "extra_body": _llm_extra_body(fallback.model) or {},
         "after_secs": after,
+        # CF-137 (2026-11-06): the wait between chunks once the answer has begun
+        "stall_secs": svp_llm_stream_stall_secs(),
     }
 
 

@@ -14,6 +14,14 @@ four things change, each unset = stock:
    caller pressed 0: they ask for a person. Call <tool> now, without a word. » - so the
    model calls the transfer tool at once (pipecat's own DTMF aggregator works the same way:
    a keypad entry becomes a transcription). Any other digit passes untouched.
+   **Amended 2026-11-06 (CF-218, ADR-078 - real callers):** a press during the agent's
+   OPENING never interrupts it - the AI disclosure is always heard to its end - and is held
+   until the first ``BotStoppedSpeakingFrame`` (the moment pipecat's
+   ``MuteUntilFirstBotCompleteUserMuteStrategy`` lifts the user mute), then delivered; a
+   press during a TOOL CALL (``FunctionCallUserMuteStrategy``'s mute) is held until the call
+   answers, so a write in flight is never cancelled by it. Held, it was dropped by the muted
+   aggregator before (the owner's run 92, 2026-10-28). A held press is delivered after
+   ``SVP_HANDOFF_HOLD_MAX_MS`` (20000) whatever happens, so it is never lost.
 2. **The dial string is the edge's** (``svp_dial_string``): ``SVP_ARI_TRANSFER_DIAL``, a
    template with ``{destination}`` and ``{mode}`` (« Local/{destination}@svp-transfer-{mode} »),
    turns the platform's E.164 number into what the edge dials - announced (the person hears a
@@ -30,12 +38,19 @@ four things change, each unset = stock:
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
 from loguru import logger
 from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
+    CancelFrame,
+    EndFrame,
     Frame,
+    FunctionCallCancelFrame,
+    FunctionCallResultFrame,
+    FunctionCallsStartedFrame,
     InputDTMFFrame,
     TranscriptionFrame,
     UserStartedSpeakingFrame,
@@ -52,6 +67,16 @@ MODES = ("announced", "blind")
 
 def enabled() -> bool:
     return os.environ.get("SVP_HANDOFF", "").strip().lower() in ("on", "1", "true")
+
+
+def hold_max_seconds() -> float:
+    """CF-218: the longest a press is held while the opening or a tool call runs."""
+    raw = os.environ.get("SVP_HANDOFF_HOLD_MAX_MS", "").strip()
+    try:
+        ms = int(raw) if raw else 20000
+    except ValueError:
+        ms = 20000
+    return min(max(ms, 1000), 120000) / 1000
 
 
 def channel_vars_enabled() -> bool:
@@ -170,6 +195,72 @@ class HandoffKeypadProcessor(FrameProcessor):
         # it builds this processor (`uses_external_turns`); a frame carrying the recogniser's
         # recommended strategies (its service metadata frame) says so too.
         self._external_turns = bool(external_turns)
+        # CF-218 (2026-11-06): the opening is over at the first BotStoppedSpeakingFrame (the
+        # aggregator's own mute lifts on it); tool calls in flight are tracked by their ids
+        # from the frames the LLM service broadcasts upstream
+        self._opening_done = False
+        self._calls: set[str] = set()
+        self._held: FrameDirection | None = None
+        self._hold_task: asyncio.Task | None = None
+        self.held_presses = 0
+
+    def _blocked(self) -> str | None:
+        if not self._opening_done:
+            return "the opening"
+        if self._calls:
+            return "a tool call"
+        return None
+
+    def _track(self, frame: Frame) -> None:
+        if isinstance(frame, BotStoppedSpeakingFrame):
+            self._opening_done = True
+        elif isinstance(frame, FunctionCallsStartedFrame):
+            for call in getattr(frame, "function_calls", None) or []:
+                self._calls.add(str(getattr(call, "tool_call_id", "")))
+        elif isinstance(frame, (FunctionCallResultFrame, FunctionCallCancelFrame)):
+            self._calls.discard(str(getattr(frame, "tool_call_id", "")))
+
+    async def _deliver(self, direction: FrameDirection) -> None:
+        """The press as the caller's request: the agent interrupted, the platform's words."""
+        await self.broadcast_interruption()
+        if self._external_turns:
+            await self.push_frame(UserStartedSpeakingFrame(), direction)
+        await self.push_frame(
+            TranscriptionFrame(
+                text=keypad_text(self._digit, self._tool),
+                user_id="",
+                timestamp=time_now_iso8601(),
+                finalized=True,
+            ),
+            direction,
+        )
+        if self._external_turns:
+            await self.push_frame(UserStoppedSpeakingFrame(), direction)
+
+    async def _release(self, reason: str) -> None:
+        direction, self._held = self._held, None
+        task, self._hold_task = self._hold_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        if direction is None:
+            return
+        logger.info(f"P-40: the held keypad {self._digit} delivered on run {self._run_id} ({reason})")
+        await self._deliver(direction)
+
+    async def _hold_timeout(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+        if self._held is not None:
+            logger.warning(
+                f"P-40: keypad {self._digit} held {seconds:.0f} s on run {self._run_id} "
+                f"({self._blocked()} not over): delivered anyway"
+            )
+            await self._release("the hold's time limit")
+
+    async def cleanup(self):
+        task, self._hold_task = self._hold_task, None
+        if task is not None:
+            task.cancel()
+        await super().cleanup()
 
     def learn_turn_strategies(self, frame: Frame) -> None:
         strategies = getattr(frame, "user_turn_strategies", None)
@@ -186,19 +277,25 @@ class HandoffKeypadProcessor(FrameProcessor):
                 f"({self._tool}; turn ended by the press: {self._external_turns})"
             )
             await self.push_frame(frame, direction)
-            await self.broadcast_interruption()
-            if self._external_turns:
-                await self.push_frame(UserStartedSpeakingFrame(), direction)
-            await self.push_frame(
-                TranscriptionFrame(
-                    text=keypad_text(self._digit, self._tool),
-                    user_id="",
-                    timestamp=time_now_iso8601(),
-                    finalized=True,
-                ),
-                direction,
-            )
-            if self._external_turns:
-                await self.push_frame(UserStoppedSpeakingFrame(), direction)
+            blocked = self._blocked()
+            if blocked:
+                # CF-218: never cut the opening (the AI disclosure) nor a tool call in flight;
+                # held - one delivery however many presses - until it is over
+                self.held_presses += 1
+                if self._held is None:
+                    self._held = direction
+                    self._hold_task = asyncio.get_running_loop().create_task(
+                        self._hold_timeout(hold_max_seconds())
+                    )
+                    logger.info(
+                        f"P-40: keypad {self._digit} held on run {self._run_id} until {blocked} is over"
+                    )
+                return
+            await self._deliver(direction)
             return
+        self._track(frame)
         await self.push_frame(frame, direction)
+        if isinstance(frame, (EndFrame, CancelFrame)):
+            return
+        if self._held is not None and self._blocked() is None:
+            await self._release("the opening or the tool call over")

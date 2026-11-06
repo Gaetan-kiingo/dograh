@@ -140,6 +140,20 @@ def svp_llm_fallback_section(workflow_configurations: dict | None):
     return _build_section_from_override(ServiceType.LLM, block)
 
 
+def svp_llm_stream_stall_secs() -> float | None:
+    """P-46 amended (CF-137, ADR-078 - 2026-11-06): `SVP_LLM_STREAM_STALL_MS` - the longest
+    wait between two chunks once the answer has begun; a stall then ends the turn with what
+    was said. Unset or invalid = no watch (stock)."""
+    import os
+
+    raw = (os.getenv("SVP_LLM_STREAM_STALL_MS") or "").strip()
+    try:
+        value = float(raw) / 1000 if raw else None
+    except ValueError:
+        return None
+    return value if value and value > 0 else None
+
+
 def svp_llm_fallback_after_secs() -> float | None:
     """P-46: `SVP_LLM_FALLBACK_AFTER_MS` - how long the primary engine has to give its first
     chunk before the turn is asked again of the fallback; unset or invalid = stock (none)."""

@@ -31,8 +31,10 @@ def test_handoff_of_reads_the_platforms_configuration_and_nothing_else():
         assert handoff.enabled()
 
 
-def _processor():
-    proc = handoff.HandoffKeypadProcessor(digit="0", tool="transfer_to_x", run_id=77)
+def _processor(*, opening_done: bool = True, external_turns: bool = False):
+    proc = handoff.HandoffKeypadProcessor(
+        digit="0", tool="transfer_to_x", run_id=77, external_turns=external_turns
+    )
     pushed: list = []
 
     async def push(frame, direction=FrameDirection.DOWNSTREAM):
@@ -41,6 +43,9 @@ def _processor():
     proc.push_frame = push  # type: ignore[method-assign]
     proc.broadcast_interruption = AsyncMock()  # type: ignore[method-assign]
     proc._FrameProcessor__started = True  # the frame-processor base checks it
+    if opening_done:
+        # CF-218: the opening is over once the first BotStoppedSpeakingFrame went by
+        proc._opening_done = True
     return proc, pushed
 
 
@@ -246,15 +251,7 @@ async def test_cf216_the_pipeline_tells_the_processor_it_runs_external_turns():
     the turns): the pipeline passes what it knows when it builds the processor."""
     from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
 
-    proc = handoff.HandoffKeypadProcessor(digit="0", tool="t", run_id=1, external_turns=True)
-    pushed: list = []
-
-    async def push(frame, direction=FrameDirection.DOWNSTREAM):
-        pushed.append(frame)
-
-    proc.push_frame = push  # type: ignore[method-assign]
-    proc.broadcast_interruption = AsyncMock()  # type: ignore[method-assign]
-    proc._FrameProcessor__started = True
+    proc, pushed = _processor(external_turns=True)
     await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
     assert [type(f) for f in pushed] == [
         InputDTMFFrame, UserStartedSpeakingFrame, TranscriptionFrame, UserStoppedSpeakingFrame,
@@ -356,3 +353,80 @@ async def test_cf217_a_failure_published_before_the_wait_is_not_missed():
     pubsub2 = await manager.subscribe_transfer("t-2")
     await manager.release_subscription(pubsub2, "t-2")
     assert pubsub2.channels == [] and pubsub2.closed
+
+
+# --- F11 (ADR-078, 2026-11-06): CF-218 - the AI disclosure is never cut by a keypad press ------
+
+
+def _keypad_texts(pushed):
+    return [f for f in pushed if isinstance(f, TranscriptionFrame) and "[KEYPAD]" in f.text]
+
+
+@pytest.mark.asyncio
+async def test_cf218_a_press_during_the_opening_never_cuts_it_and_is_delivered_after_it():
+    """The owner's run 92 (2026-10-28): the first 0, 1.6 s into the opening, cut the agent and
+    was then dropped by the muted aggregator. Now the opening - the AI disclosure - is heard
+    to its end, then the press is the caller's request."""
+    from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame
+
+    proc, pushed = _processor(opening_done=False)
+    await proc.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
+    await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
+    proc.broadcast_interruption.assert_not_awaited()  # the opening goes on
+    assert _keypad_texts(pushed) == [] and proc.presses == 2 and proc.held_presses == 2
+    stopped = BotStoppedSpeakingFrame()
+    await proc.process_frame(stopped, FrameDirection.UPSTREAM)
+    # the end of the opening goes on first, then ONE request for a person
+    assert pushed.index(stopped) < pushed.index(_keypad_texts(pushed)[0])
+    assert len(_keypad_texts(pushed)) == 1
+    proc.broadcast_interruption.assert_awaited_once()
+    # the next press, after the opening, interrupts at once as before
+    await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
+    assert len(_keypad_texts(pushed)) == 2 and proc.broadcast_interruption.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cf218_a_press_during_a_tool_call_waits_for_its_answer():
+    """A write in flight is never cancelled by the press (FunctionCallUserMuteStrategy mutes
+    the aggregator meanwhile): held until the tool answers, then delivered."""
+    from pipecat.frames.frames import (
+        FunctionCallFromLLM,
+        FunctionCallResultFrame,
+        FunctionCallsStartedFrame,
+    )
+
+    proc, pushed = _processor()
+    call = FunctionCallFromLLM(
+        function_name="book_appointment", tool_call_id="call-1", arguments={}, context=None
+    )
+    await proc.process_frame(FunctionCallsStartedFrame(function_calls=[call]), FrameDirection.UPSTREAM)
+    await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
+    proc.broadcast_interruption.assert_not_awaited()
+    assert _keypad_texts(pushed) == []
+    await proc.process_frame(
+        FunctionCallResultFrame(
+            function_name="book_appointment", tool_call_id="call-1", arguments={}, result={}
+        ),
+        FrameDirection.UPSTREAM,
+    )
+    assert len(_keypad_texts(pushed)) == 1
+    proc.broadcast_interruption.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cf218_a_held_press_is_never_lost(monkeypatch):
+    """No end of the opening ever seen (a voice that never spoke): the press is delivered
+    after SVP_HANDOFF_HOLD_MAX_MS whatever happens."""
+    import asyncio
+
+    monkeypatch.setenv("SVP_HANDOFF_HOLD_MAX_MS", "1000")
+    assert handoff.hold_max_seconds() == 1.0
+    proc, pushed = _processor(opening_done=False)
+    await proc.process_frame(InputDTMFFrame(button=KeypadEntry.ZERO), FrameDirection.DOWNSTREAM)
+    assert _keypad_texts(pushed) == []
+    await asyncio.sleep(1.3)
+    assert len(_keypad_texts(pushed)) == 1
+    proc.broadcast_interruption.assert_awaited_once()
+    monkeypatch.setenv("SVP_HANDOFF_HOLD_MAX_MS", "nonsense")
+    assert handoff.hold_max_seconds() == 20.0
