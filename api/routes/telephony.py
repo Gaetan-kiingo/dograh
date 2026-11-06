@@ -32,6 +32,7 @@ from api.services.call_concurrency import (
     WorkflowRunSlotAlreadyBoundError,
     call_concurrency,
 )
+from api.services import svp_caller_screen
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.telephony import ws_auth
 from api.services.telephony.call_transfer_manager import get_call_transfer_manager
@@ -547,6 +548,7 @@ async def _create_inbound_workflow_run(
     normalized_data,
     telephony_configuration_id: int,
     from_phone_number_id: Optional[int] = None,
+    caller_trust: Optional[str] = None,
 ) -> int:
     """Create workflow run for inbound call and return run ID"""
     call_id = normalized_data.call_id
@@ -571,6 +573,8 @@ async def _create_inbound_workflow_run(
             "direction": "inbound",
             "provider": provider,
             "telephony_configuration_id": telephony_configuration_id,
+            # P-51: how far the caller-ID can be trusted
+            **({"svp_caller_trust": caller_trust} if caller_trust else {}),
         },
         gathered_context={
             "call_id": call_id,
@@ -1002,6 +1006,23 @@ async def handle_inbound_run(request: Request):
                 TelephonyError.SIGNATURE_VALIDATION_FAILED
             )
 
+        # P-51 (Swiss Voice Platform, CF-249, CF-209): a blocked caller is refused before
+        # the call is answered - Twilio's <Reject>, no slot, no run; the caller-ID's trust
+        # from the webhook (a hidden From, STIR/SHAKEN's full attestation)
+        svp_caller_trust = None
+        if svp_caller_screen.enabled() and provider_class.PROVIDER_NAME == "twilio":
+            svp_caller_trust = svp_caller_screen.trust_from_twilio(
+                normalized_data.raw_data or webhook_data
+            )
+            if await svp_caller_screen.screen(
+                organization_id=config.organization_id,
+                caller_number=normalized_data.from_number,
+                called_number=normalized_data.to_number,
+                provider="twilio",
+                caller_trust=svp_caller_trust,
+            ):
+                return svp_caller_screen.twilio_reject_response()
+
         try:
             concurrency_slot = await call_concurrency.acquire_org_slot(
                 config.organization_id,
@@ -1025,6 +1046,7 @@ async def handle_inbound_run(request: Request):
                 normalized_data,
                 telephony_configuration_id=telephony_configuration_id,
                 from_phone_number_id=phone_row.id,
+                caller_trust=svp_caller_trust,
             )
             await call_concurrency.bind_workflow_run(concurrency_slot, workflow_run_id)
 

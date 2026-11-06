@@ -182,6 +182,9 @@ async def _run_body(run_id: int) -> dict[str, Any] | None:
         "provider": initial.get("provider"),
         "caller_number": initial.get("caller_number"),
         "called_number": initial.get("called_number"),
+        # P-51 (SEC-013, CF-209): how far the caller-ID can be trusted - network, presented,
+        # withheld; absent when the screening is off
+        "caller_trust": initial.get("svp_caller_trust"),
         # P-35 amended (D3b, ADR-056 amendment of 2026-10-27; TEL-007): the number the
         # carrier says the call was forwarded from - Twilio's ForwardedFrom
         "forwarded_from": forwarded_from_of(workflow_run),

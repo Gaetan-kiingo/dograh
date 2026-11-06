@@ -47,6 +47,7 @@ from api.services.call_concurrency import (
     call_concurrency,
 )
 from api.services.organization_preferences import external_pbx_integrations_enabled
+from api.services import svp_caller_screen
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.telephony import ws_auth
 from api.services.telephony.factory import resolve_telephony_secret_references_for_org
@@ -862,6 +863,28 @@ class ARIConnection:
 
             user_id = workflow.user_id
 
+            # P-51 (Swiss Voice Platform, CF-249, CF-209): a blocked caller is refused
+            # before the call is answered - no slot, no run, no answer; the channel is hung
+            # up unanswered with cause 21 and the carrier tells the caller. The edge's
+            # dialplan says how far the caller-ID can be trusted (SVP_CALLER_TRUST).
+            svp_caller_trust = None
+            if svp_caller_screen.enabled():
+                raw_trust = ""
+                try:
+                    raw_trust = await self._get_channel_var(channel_id, "SVP_CALLER_TRUST")
+                except Exception as e:  # noqa: BLE001 - the runtime classes it itself
+                    logger.debug(f"[ARI org={self.organization_id}] SVP_CALLER_TRUST not read: {e}")
+                svp_caller_trust = svp_caller_screen.trust_of(caller_number, raw_trust)
+                if await svp_caller_screen.screen(
+                    organization_id=self.organization_id,
+                    caller_number=caller_number,
+                    called_number=called_number,
+                    provider="ari",
+                    caller_trust=svp_caller_trust,
+                ):
+                    await self._delete_channel(channel_id, reason_code=21)
+                    return
+
             try:
                 concurrency_slot = await call_concurrency.acquire_org_slot(
                     self.organization_id,
@@ -920,6 +943,8 @@ class ARIConnection:
                     "external_pbx_call": external_pbx_call,
                     **({"svp_codec": svp_codec} if svp_codec else {}),
                     **({"svp_trunk": svp_trunk} if svp_trunk else {}),
+                    # P-51: how far the caller-ID can be trusted (the edge's word, or ours)
+                    **({"svp_caller_trust": svp_caller_trust} if svp_caller_trust else {}),
                     # P-04: the instance the call came in on - the handoff dials from it
                     **({"svp_ari_endpoint": self.ari_endpoint} if ari_endpoints_enabled() else {}),
                 },
@@ -1432,17 +1457,22 @@ class ARIConnection:
         except Exception as e:
             logger.error(f"[ARI Transfer] Error handling transfer failure: {e}")
 
-    async def _delete_channel(self, channel_id: str):
-        """Delete (hang up) an ARI channel. Ignores 404 (already gone)."""
+    async def _delete_channel(self, channel_id: str, reason_code: Optional[int] = None):
+        """Delete (hang up) an ARI channel. Ignores 404 (already gone).
+
+        P-51: ``reason_code`` is the Q.850 cause given to the far end (21, call rejected,
+        for a blocked caller); none = Asterisk's default (normal clearing)."""
 
         url = f"{self.ari_endpoint}/ari/channels/{channel_id}"
         auth = aiohttp.BasicAuth(self.app_name, self.app_password)
+        params = {"reason_code": str(int(reason_code))} if reason_code is not None else None
 
         async with aiohttp.ClientSession() as session:
-            async with session.delete(url, auth=auth) as response:
+            async with session.delete(url, auth=auth, params=params) as response:
                 if response.status in (200, 204):
                     logger.info(
                         f"[ARI org={self.organization_id}] Deleted channel {channel_id}"
+                        + (f" (cause {reason_code})" if reason_code is not None else "")
                     )
                 elif response.status == 404:
                     logger.debug(
