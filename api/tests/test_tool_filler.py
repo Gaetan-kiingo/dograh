@@ -112,3 +112,58 @@ async def test_p52_a_write_that_spoke_waits_with_no_delayed_filler():
 
     assert await tool_filler.with_filler(slow(), speak, "Un instant", after_ms=0) == "booked"
     assert spoken == []
+
+
+# --- P-52 amended (P-53's event): the sentence as soon as the confirmation begins to stream
+
+
+def test_p52_early_the_sentence_starts_when_the_confirmation_begins(monkeypatch):
+    monkeypatch.setenv("SVP_WRITE_PROGRESS", "on")
+    monkeypatch.delenv("SVP_WRITE_PROGRESS_EARLY", raising=False)
+    begun = '{"confirm": "p1'
+    assert tool_filler.write_progress_early_text("book_appointment", begun, _config("fr")) is None
+    monkeypatch.setenv("SVP_WRITE_PROGRESS_EARLY", "on")
+    assert tool_filler.write_progress_early_text("book_appointment", begun, _config("fr")) == (
+        "Un instant, j'enregistre votre rendez-vous."
+    )
+    # not yet: the name only, an empty confirmation, or a read-back with no confirmation at all
+    for partial in ("", '{"confirm": "', '{"confirm": ""', '{"date": "2026-11-11", "time": "16:00"}'):
+        assert tool_filler.write_progress_early_text("book_appointment", partial, {}) is None, partial
+    # the caller's language when the call switched (P-07)
+    assert tool_filler.write_progress_early_text(
+        "book_appointment", begun, _config("fr"), language="de"
+    ) == "Einen Moment, ich trage Ihren Termin ein."
+    # P-52's own switch still governs the sentence
+    monkeypatch.setenv("SVP_WRITE_PROGRESS", "off")
+    assert tool_filler.write_progress_early_text("book_appointment", begun, _config("fr")) is None
+
+
+@pytest.mark.asyncio
+async def test_p52_early_speaks_once_per_call_and_never_for_a_read_tool(monkeypatch):
+    from types import SimpleNamespace
+
+    from api.services.workflow.pipecat_engine_custom_tools import CustomToolManager
+
+    monkeypatch.setenv("SVP_WRITE_PROGRESS", "on")
+    monkeypatch.setenv("SVP_WRITE_PROGRESS_EARLY", "on")
+    engine = SimpleNamespace(
+        _svp_write_configs={"book_appointment": _config("fr")},
+        _svp_write_spoken=set(),
+        _svp_caller_language=None,
+        _queued_speech_mute_state=None,
+    )
+    manager = CustomToolManager.__new__(CustomToolManager)
+    manager._engine = engine
+    pushed = []
+
+    class Llm:
+        async def push_frame(self, frame):
+            pushed.append(frame)
+
+    llm = Llm()
+    for partial in ('{"confirm": "p', '{"confirm": "p1.k', '{"confirm": "p1.k1.17", "date": "'):
+        await manager._svp_on_streamed_call(llm, "book_appointment", partial, "call-1")
+    await manager._svp_on_streamed_call(llm, "find_available_slots", '{"confirm": "p1', "call-2")
+    assert [f.text for f in pushed] == ["Un instant, j'enregistre votre rendez-vous."]
+    assert pushed[0].svp_progress is True and pushed[0].append_to_context is False
+    assert engine._svp_write_spoken == {"call-1"}

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -78,11 +79,14 @@ def write_progress_on() -> bool:
 
 
 def write_progress_text(
-    function_name: str, arguments: dict[str, Any] | None, config: dict[str, Any] | None
+    function_name: str,
+    arguments: dict[str, Any] | None,
+    config: dict[str, Any] | None,
+    language: str | None = None,
 ) -> str | None:
-    """The sentence a confirmed write says as it is sent, in the call's language; None when the
-    switch is off, when the call is the read-back (no confirmation yet), or when the write has
-    no sentence."""
+    """The sentence a confirmed write says as it is sent, in the call's language (the caller's
+    when the call switched, P-07); None when the switch is off, when the call is the read-back
+    (no confirmation yet), or when the write has no sentence."""
     if not write_progress_on():
         return None
     if not str((arguments or {}).get("confirm") or "").strip():
@@ -90,8 +94,38 @@ def write_progress_text(
     for name, phrases in WRITE_PHRASES.items():
         # the platform names a second connection's tool `book_appointment_2`
         if function_name == name or function_name.startswith(f"{name}_"):
-            return phrases[language_of(config)]
+            spoken = (language or "")[:2].lower()
+            return phrases[spoken if spoken in phrases else language_of(config)]
     return None
+
+
+# P-52 amended (P-53's event): the same sentence as soon as the confirmation begins to stream,
+# before the model has written the rest of the call - `SVP_WRITE_PROGRESS_EARLY=on` (with
+# `SVP_WRITE_PROGRESS`); off = the sentence as the call is sent
+_CONFIRM_BEGUN = re.compile(r'"confirm"\s*:\s*"[^"\s]')
+
+
+def write_progress_early_on() -> bool:
+    return os.getenv("SVP_WRITE_PROGRESS_EARLY", "").strip().lower() in (
+        "on",
+        "1",
+        "true",
+    )
+
+
+def write_progress_early_text(
+    function_name: str,
+    partial_arguments: str,
+    config: dict[str, Any] | None,
+    language: str | None = None,
+) -> str | None:
+    """The sentence of a confirmed write whose confirmation has begun in the streamed
+    arguments; None before it does, or when the early start is off."""
+    if not write_progress_early_on():
+        return None
+    if not _CONFIRM_BEGUN.search(partial_arguments or ""):
+        return None
+    return write_progress_text(function_name, {"confirm": "begun"}, config, language)
 
 
 async def with_filler(

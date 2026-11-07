@@ -338,11 +338,19 @@ class CustomToolManager:
                     timeout_secs=timeout_secs,
                     is_node_transition=is_node_transition,
                 )
+                # P-52: a write tool may say what it is doing as it is written or sent
+                if is_svp_write_tool(tool):
+                    self._svp_state("_svp_write_configs", dict)[function_name] = (
+                        tool.definition.get("config", {}) if tool.definition else {}
+                    )
 
                 logger.debug(
                     f"Registered custom tool handler: {function_name} "
                     f"(tool_uuid: {tool.tool_uuid})"
                 )
+
+            if self._svp_state("_svp_write_configs", dict):
+                self._svp_listen_to_streamed_calls()
 
         except Exception as e:
             logger.error(f"Failed to register custom tool handlers: {e}")
@@ -404,6 +412,61 @@ class CustomToolManager:
             + _TRANSFER_EXTERNAL_PBX_API_TIMEOUT_SECS
             + _TRANSFER_POST_HANDOFF_DELAY_SECS
         )
+
+    def _svp_state(self, name: str, kind: type) -> Any:
+        """P-52: the engine's write state (a dict or a set), made when missing."""
+        found = getattr(self._engine, name, None)
+        if not isinstance(found, kind):
+            found = kind()
+            setattr(self._engine, name, found)
+        return found
+
+    def _svp_language(self) -> str | None:
+        language = getattr(self._engine, "_svp_caller_language", None)
+        return language if isinstance(language, str) else None
+
+    def _svp_listen_to_streamed_calls(self) -> None:
+        """P-52 amended: once per call, the runtime hears a tool call as it streams (pipecat's
+        P-53 event) so a confirmed write can speak before the model has finished writing it."""
+        from api.services.workflow.tool_filler import write_progress_early_on
+
+        llm = self._engine.llm
+        if not write_progress_early_on() or getattr(self._engine, "_svp_early_listening", False):
+            return
+        if "on_svp_tool_call_streaming" not in (getattr(llm, "_event_handlers", None) or {}):
+            return  # an engine without the event (not OpenAI-compatible): the sentence at send
+        llm.add_event_handler("on_svp_tool_call_streaming", self._svp_on_streamed_call)
+        self._engine._svp_early_listening = True
+
+    def _svp_progress_frame(self, text: str) -> TTSSpeakFrame:
+        self._engine._queued_speech_mute_state = "waiting"
+        frame = TTSSpeakFrame(text, append_to_context=False, persist_to_logs=True)
+        # P-28 (ADR-002): the timeline says this sentence was the progress phrase
+        frame.svp_progress = True
+        return frame
+
+    async def _svp_on_streamed_call(
+        self, llm: Any, function_name: str, arguments: str, tool_call_id: str
+    ) -> None:
+        """A confirmed write whose confirmation has begun streaming speaks now, once per call -
+        pushed downstream from the LLM itself, which is still busy with the reply."""
+        from api.services.workflow.tool_filler import write_progress_early_text
+
+        spoken = self._svp_state("_svp_write_spoken", set)
+        if not tool_call_id or tool_call_id in spoken:
+            return
+        config = self._svp_state("_svp_write_configs", dict).get(function_name)
+        if config is None:
+            return
+        text = write_progress_early_text(function_name, arguments, config, self._svp_language())
+        if not text:
+            return
+        spoken.add(tool_call_id)
+        logger.info(f"P-52: confirmed write '{function_name}' is being written, speaking now")
+        try:
+            await llm.push_frame(self._svp_progress_frame(text))
+        except Exception as e:  # the sentence must never fail the call
+            logger.warning(f"P-52: the early sentence was not pushed: {e}")
 
     def _register_calculator_handler(self) -> None:
         """Register the built-in calculator function with the LLM."""
@@ -523,13 +586,7 @@ class CustomToolManager:
                         logger.warning(f"P-25: could not read the approved filler: {e}")
 
                 async def _speak_progress(text: str) -> None:
-                    self._engine._queued_speech_mute_state = "waiting"
-                    frame = TTSSpeakFrame(
-                        text, append_to_context=False, persist_to_logs=True
-                    )
-                    # P-28 (ADR-002): the timeline says this sentence was the progress phrase
-                    frame.svp_progress = True
-                    await self._engine.task.queue_frame(frame)
+                    await self._engine.task.queue_frame(self._svp_progress_frame(text))
 
                 async def _speak_filler(text: str) -> None:
                     logger.info(f"P-18: tool '{function_name}' is slow, speaking the filler")
@@ -542,9 +599,17 @@ class CustomToolManager:
                     from api.services.workflow.tool_filler import write_progress_text
 
                     write_text = write_progress_text(
-                        function_name, function_call_params.arguments, config
+                        function_name,
+                        function_call_params.arguments,
+                        config,
+                        self._svp_language(),
                     )
-                if write_text:
+                said_early = bool(write_text) and (
+                    function_call_params.tool_call_id in self._svp_state("_svp_write_spoken", set)
+                )
+                if write_text and said_early:
+                    logger.info(f"P-52: '{function_name}' already spoke while it was written")
+                elif write_text:
                     logger.info(
                         f"P-52: confirmed write '{function_name}', speaking as it is sent"
                     )

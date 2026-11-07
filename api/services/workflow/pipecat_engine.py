@@ -113,6 +113,9 @@ class PipecatEngine:
         # follows the system prompt of this and every later step; the announcement is
         # asked once, for the next reply
         self._svp_caller_language: str | None = None
+        # P-52: the write tools' configurations by function name, the calls that already spoke
+        self._svp_write_configs: dict[str, dict] = {}
+        self._svp_write_spoken: set[str] = set()
         self._svp_language_instruction: str = ""
         self._svp_language_announce: str = ""
         self._node_transition_callback = node_transition_callback
