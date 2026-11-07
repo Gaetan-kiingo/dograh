@@ -522,8 +522,7 @@ class CustomToolManager:
                     except Exception as e:  # the filler must never fail the tool
                         logger.warning(f"P-25: could not read the approved filler: {e}")
 
-                async def _speak_filler(text: str) -> None:
-                    logger.info(f"P-18: tool '{function_name}' is slow, speaking the filler")
+                async def _speak_progress(text: str) -> None:
                     self._engine._queued_speech_mute_state = "waiting"
                     frame = TTSSpeakFrame(
                         text, append_to_context=False, persist_to_logs=True
@@ -531,6 +530,28 @@ class CustomToolManager:
                     # P-28 (ADR-002): the timeline says this sentence was the progress phrase
                     frame.svp_progress = True
                     await self._engine.task.queue_frame(frame)
+
+                async def _speak_filler(text: str) -> None:
+                    logger.info(f"P-18: tool '{function_name}' is slow, speaking the filler")
+                    await _speak_progress(text)
+
+                # P-52 (ADR-033 amendment of 2026-11-07): a confirmed booking says what it is
+                # doing as it is sent - the delayed filler is then not needed
+                write_text = None
+                if is_svp_write_tool(tool):
+                    from api.services.workflow.tool_filler import write_progress_text
+
+                    write_text = write_progress_text(
+                        function_name, function_call_params.arguments, config
+                    )
+                if write_text:
+                    logger.info(
+                        f"P-52: confirmed write '{function_name}', speaking as it is sent"
+                    )
+                    try:
+                        await _speak_progress(write_text)
+                    except Exception as e:  # the sentence must never fail the write
+                        logger.warning(f"P-52: the sentence was not queued: {e}")
 
                 result = await with_filler(
                     execute_http_tool(
@@ -545,6 +566,7 @@ class CustomToolManager:
                     ),
                     _speak_filler,
                     filler_text(config, self._engine._svp_filler),
+                    after_ms=0 if write_text else None,
                 )
 
                 # P-32 (ADR-002): a write tool of the step has answered - the step's

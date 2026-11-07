@@ -58,6 +58,42 @@ def approved_filler(configurations: dict[str, Any] | None) -> str:
     return " ".join(str(phrases.get("filler") or "").split())
 
 
+# P-52 (Swiss Voice Platform, ADR-033 amendment of 2026-11-07; PERF-008): a confirmed booking
+# says what it is doing at the moment it is sent - `SVP_WRITE_PROGRESS=on` (unset = stock: the
+# delayed filler alone). Only the call that carries the read-back's confirmation (the read-back
+# itself writes nothing and answers at once), only a write that has a sentence. The owner's
+# test: tried on calls, reverted by the switch if it does not sound right.
+WRITE_PHRASES = {
+    "book_appointment": {
+        "fr": "Un instant, j'enregistre votre rendez-vous.",
+        "de": "Einen Moment, ich trage Ihren Termin ein.",
+        "it": "Un attimo, registro il suo appuntamento.",
+        "en": "One moment, I'm booking your appointment.",
+    },
+}
+
+
+def write_progress_on() -> bool:
+    return os.getenv("SVP_WRITE_PROGRESS", "").strip().lower() in ("on", "1", "true")
+
+
+def write_progress_text(
+    function_name: str, arguments: dict[str, Any] | None, config: dict[str, Any] | None
+) -> str | None:
+    """The sentence a confirmed write says as it is sent, in the call's language; None when the
+    switch is off, when the call is the read-back (no confirmation yet), or when the write has
+    no sentence."""
+    if not write_progress_on():
+        return None
+    if not str((arguments or {}).get("confirm") or "").strip():
+        return None
+    for name, phrases in WRITE_PHRASES.items():
+        # the platform names a second connection's tool `book_appointment_2`
+        if function_name == name or function_name.startswith(f"{name}_"):
+            return phrases[language_of(config)]
+    return None
+
+
 async def with_filler(
     work: Awaitable[Any],
     speak: Callable[[str], Awaitable[None]],
