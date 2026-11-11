@@ -90,14 +90,19 @@ def channel_variables(
     *,
     trunk: str | None = None,
     caller_id: str | None = None,
+    run_id: int | str | None = None,
+    organization_id: int | str | None = None,
 ) -> dict[str, str]:
     """What the edge's dialplan learns about a leg the runtime originates: the Stasis
     application it dials for (the workspace's trunk and caller id are globals named after
     it on the edge), the handoff's mode and - amended 2026-10-29, several lines per
     workspace - the trunk the call came in on with the number the caller dialled as the
     caller id (`SVP_TRUNK` read from the inbound channel at the answer, `called_number`),
-    so the handoff goes out on the line it came in on. The `__` prefix makes Asterisk hand
-    the variables down to the Local channel's dialplan leg and to what it dials."""
+    so the handoff goes out on the line it came in on. Amended 2026-11-11 (E1b, ADR-082):
+    the leg names its call - the workflow run and the runtime organisation - so the edge's
+    hangup handler tells the platform how long the dialled leg lasted and whose call it is.
+    The `__` prefix makes Asterisk hand the variables down to the Local channel's dialplan
+    leg and to what it dials."""
     if not channel_vars_enabled() or not stasis_app:
         return {}
     out = {"__SVP_STASIS": str(stasis_app)}
@@ -107,6 +112,10 @@ def channel_variables(
         out["__SVP_TRUNK"] = str(trunk)
         if caller_id:
             out["__SVP_CALLERID"] = str(caller_id)
+    if run_id not in (None, ""):
+        out["__SVP_RUN"] = str(run_id)
+    if organization_id not in (None, ""):
+        out["__SVP_ORG"] = str(organization_id)
     return out
 
 

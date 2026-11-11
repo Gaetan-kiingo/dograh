@@ -1,3 +1,4 @@
+import os
 import time
 from collections import defaultdict
 from typing import Dict, Optional
@@ -14,9 +15,16 @@ from pipecat.frames.frames import (
 from pipecat.metrics.metrics import (
     LLMTokenUsage,
     LLMUsageMetricsData,
+    STTUsageMetricsData,
     TTSUsageMetricsData,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+
+def svp_stt_usage_on() -> bool:
+    """P-54 (Swiss Voice Platform, ADR-002; E1b, ADR-082): the recogniser's audio seconds
+    kept with the run's usage - `SVP_STT_USAGE=on`; unset = stock (the `stt` block empty)."""
+    return os.getenv("SVP_STT_USAGE", "").strip().lower() in ("on", "1", "true")
 
 
 class PipelineMetricsAggregator(FrameProcessor):
@@ -48,6 +56,9 @@ class PipelineMetricsAggregator(FrameProcessor):
                     await self._handle_llm_usage_metrics(data)
                 elif isinstance(data, TTSUsageMetricsData):
                     await self._handle_tts_usage_metrics(data)
+                elif isinstance(data, STTUsageMetricsData) and svp_stt_usage_on():
+                    # P-54 (ADR-002, E1b): pipecat measures them, stock dropped them
+                    await self._handle_stt_usage_metrics(data)
 
         await self.push_frame(frame, direction)
 
@@ -101,6 +112,12 @@ class PipelineMetricsAggregator(FrameProcessor):
         self._tts_usage_metrics[key] += data.value
         # logger.debug(f"TTS usage metrics: {self._tts_usage_metrics}")
 
+    async def _handle_stt_usage_metrics(self, data: STTUsageMetricsData):
+        """P-54 (ADR-002, E1b): the audio seconds sent to the recogniser, summed per
+        processor|||model like the TTS characters (the provider's billing unit)."""
+        key = f"{data.processor}|||{data.model}"
+        self._stt_usage_metrics[key] += float(data.value.audio_seconds or 0.0)
+
     def get_llm_usage_metrics(self) -> Dict[str, LLMTokenUsage]:
         """Get the aggregated LLM usage metrics grouped by processor|||model."""
         return self._llm_usage_metrics
@@ -141,7 +158,8 @@ class PipelineMetricsAggregator(FrameProcessor):
         return {
             "llm": serialized_llm,
             "tts": dict(self._tts_usage_metrics),
-            "stt": dict(self._stt_usage_metrics),
+            # P-54 (ADR-002, E1b): seconds to the millisecond; empty unless SVP_STT_USAGE
+            "stt": {k: round(v, 3) for k, v in self._stt_usage_metrics.items()},
             "call_duration_seconds": self.get_call_duration(),
         }
 

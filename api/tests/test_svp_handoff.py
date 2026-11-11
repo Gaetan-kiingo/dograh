@@ -3,6 +3,7 @@ handoff - the keypad shortcut, the edge's dial string, the failure codes, the pl
 events. Everything behind SVP_HANDOFF / SVP_ARI_TRANSFER_DIAL; unset = stock."""
 
 import os
+from typing import ClassVar
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -430,3 +431,141 @@ async def test_cf218_a_held_press_is_never_lost(monkeypatch):
     proc.broadcast_interruption.assert_awaited_once()
     monkeypatch.setenv("SVP_HANDOFF_HOLD_MAX_MS", "nonsense")
     assert handoff.hold_max_seconds() == 20.0
+
+
+# --- P-44 amended (2026-11-11, E1b, ADR-082; BIL-003, PROV-015): the dialled leg names its call
+
+
+def test_p44_names_the_run_and_the_organisation_on_the_leg():
+    """The edge's hangup handler on the dialled leg tells the platform which call it was:
+    the workflow run and the runtime organisation ride the leg, inheritable (`__`)."""
+    with patch.dict(os.environ, {"SVP_ARI_CHANNEL_VARS": "on"}):
+        assert handoff.channel_variables(
+            "dograh_abc", "announced", trunk="trunk-0123", caller_id="+41445550011",
+            run_id=5123, organization_id=42,
+        ) == {
+            "__SVP_STASIS": "dograh_abc",
+            "__SVP_MODE": "announced",
+            "__SVP_TRUNK": "trunk-0123",
+            "__SVP_CALLERID": "+41445550011",
+            "__SVP_RUN": "5123",
+            "__SVP_ORG": "42",
+        }  # fmt: skip
+        assert handoff.channel_variables("dograh_abc", run_id="5123") == {
+            "__SVP_STASIS": "dograh_abc", "__SVP_RUN": "5123",
+        }  # fmt: skip
+
+
+def test_p44_names_the_run_only_when_given():
+    with patch.dict(os.environ, {"SVP_ARI_CHANNEL_VARS": "on"}):
+        assert handoff.channel_variables("dograh_abc") == {"__SVP_STASIS": "dograh_abc"}
+        assert handoff.channel_variables("dograh_abc", run_id=None, organization_id="") == {
+            "__SVP_STASIS": "dograh_abc"
+        }
+        # no application, nothing - the run alone is never put on a leg
+        assert handoff.channel_variables(None, run_id=5123, organization_id=42) == {}
+
+
+def test_p44_names_the_run_never_with_the_switch_off():
+    with patch.dict(os.environ, {"SVP_ARI_CHANNEL_VARS": ""}):
+        assert handoff.channel_variables(
+            "dograh_abc", "announced", trunk="trunk-0123", run_id=5123, organization_id=42
+        ) == {}
+
+
+class _AriResponse:
+    status = 200
+
+    def __init__(self, body: str):
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        pass
+
+    async def text(self):
+        return self._body
+
+
+class _AriSession:
+    posted: ClassVar[list[dict]] = []
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        pass
+
+    def post(self, endpoint, params=None, json=None, auth=None):
+        _AriSession.posted.append({"endpoint": endpoint, "params": params, "json": json})
+        return _AriResponse('{"id": "chan-1", "state": "Down"}')
+
+
+def _ari_provider(monkeypatch):
+    from api.services.telephony.providers.ari import provider as ari_provider
+
+    monkeypatch.setattr(ari_provider.aiohttp, "ClientSession", _AriSession)
+    _AriSession.posted.clear()
+    return ari_provider.ARIProvider(
+        {
+            "ari_endpoint": "http://edge:8088",
+            "app_name": "dograh_abc",
+            "app_password": "x",
+            "ws_client_name": "dograh",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_p44_names_the_run_on_the_handoff_leg(monkeypatch):
+    """The transfer tool hands the run and the organisation to the ARI provider, which puts
+    them on the originated leg beside the Stasis application."""
+    monkeypatch.setenv("SVP_ARI_CHANNEL_VARS", "on")
+    provider = _ari_provider(monkeypatch)
+    manager = AsyncMock()
+    with patch(
+        "api.services.telephony.call_transfer_manager.get_call_transfer_manager",
+        AsyncMock(return_value=manager),
+    ):
+        await provider.transfer_call(
+            "+41791234567", "tr1", "transfer-c1", 25,
+            svp_mode="announced", svp_run_id=5123, svp_organization_id=42,
+        )  # fmt: skip
+    [posted] = _AriSession.posted
+    assert posted["json"]["variables"]["__SVP_RUN"] == "5123"
+    assert posted["json"]["variables"]["__SVP_ORG"] == "42"
+    assert posted["json"]["variables"]["__SVP_STASIS"] == "dograh_abc"
+    # switched off: no variables posted at all (stock)
+    monkeypatch.setenv("SVP_ARI_CHANNEL_VARS", "")
+    _AriSession.posted.clear()
+    with patch(
+        "api.services.telephony.call_transfer_manager.get_call_transfer_manager",
+        AsyncMock(return_value=manager),
+    ):
+        await provider.transfer_call(
+            "+41791234567", "tr2", "transfer-c1", 25,
+            svp_mode="announced", svp_run_id=5123, svp_organization_id=42,
+        )  # fmt: skip
+    [posted] = _AriSession.posted
+    assert posted["json"] is None
+
+
+@pytest.mark.asyncio
+async def test_p44_names_the_run_on_the_outbound_leg(monkeypatch):
+    """An outbound call (P-43's door, campaigns, the API) names its run and organisation:
+    every caller of initiate_call passes `organization_id` already."""
+    monkeypatch.setenv("SVP_ARI_CHANNEL_VARS", "on")
+    provider = _ari_provider(monkeypatch)
+    await provider.initiate_call(
+        "+41791234567", "https://runtime/webhook", workflow_run_id=777,
+        workflow_id=9, organization_id=42,
+    )  # fmt: skip
+    [posted] = _AriSession.posted
+    assert posted["json"]["variables"] == {
+        "__SVP_STASIS": "dograh_abc", "__SVP_RUN": "777", "__SVP_ORG": "42",
+    }  # fmt: skip

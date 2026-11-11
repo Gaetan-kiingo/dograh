@@ -135,10 +135,15 @@ class ARIProvider(TelephonyProvider):
         from_number = from_number or self.default_from_number
         if from_number:
             params["callerId"] = from_number
-        # P-44: the edge's dialplan learns which workspace this call is placed for
+        # P-44: the edge's dialplan learns which workspace this call is placed for and
+        # (amended 2026-11-11, E1b) which run and organisation the leg belongs to
         from api.services.pipecat.handoff import channel_variables
 
-        variables = channel_variables(self.stasis_app_name)
+        variables = channel_variables(
+            self.stasis_app_name,
+            run_id=workflow_run_id,
+            organization_id=kwargs.get("organization_id"),
+        )
 
         logger.info(
             f"[ARI] Initiating call to {sip_endpoint} "
@@ -498,12 +503,15 @@ class ARIProvider(TelephonyProvider):
 
         sip_endpoint = svp_dial_string(destination, kwargs.get("svp_mode"))
         # P-44: the edge's dialplan learns which workspace this leg is dialled for, and
-        # (amended) which trunk the call came in on, with the dialled number as caller id
+        # (amended) which trunk the call came in on, with the dialled number as caller id,
+        # and (amended 2026-11-11, E1b) the run and the organisation the leg belongs to
         variables = channel_variables(
             self.stasis_app_name,
             kwargs.get("svp_mode"),
             trunk=kwargs.get("svp_trunk"),
             caller_id=kwargs.get("svp_from_number"),
+            run_id=kwargs.get("svp_run_id"),
+            organization_id=kwargs.get("svp_organization_id"),
         )
 
         # Build transfer appArgs for event correlation

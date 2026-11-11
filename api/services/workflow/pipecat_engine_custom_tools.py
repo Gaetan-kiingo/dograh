@@ -1038,6 +1038,10 @@ class CustomToolManager:
                             svp_ari_endpoint=(
                                 getattr(workflow_run, "initial_context", None) or {}
                             ).get("svp_ari_endpoint"),
+                            # P-44 amended (2026-11-11, E1b): the dialled leg names its
+                            # call - both already in hand, no lookup
+                            svp_run_id=self._engine._workflow_run_id,
+                            svp_organization_id=organization_id,
                         )
                     # P-40 amendment (CF-217): listen for the outcome BEFORE dialling - the
                     # edge may refuse the dial at once and publish the failure within
