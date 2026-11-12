@@ -385,3 +385,244 @@ async def test_bil006_an_uncounted_test_takes_and_leaves_no_slot(switched_on):
     concurrency.acquire_org_slot.assert_not_called()
     concurrency.release_slot.assert_not_called()
     concurrency.release_workflow_run_slot.assert_not_called()
+
+
+# --- (4) amended 2026-11-12 (E2c): the caller over the limit leaves a message ------------------
+
+import httpx as _httpx
+
+BUSY_URL = "http://svp-api:8100/v1/internal/calls/busy"
+
+
+@pytest.fixture
+def mailbox_on(switched_on, monkeypatch):
+    monkeypatch.setenv("SVP_BUSY_VOICEMAIL", "on")
+    monkeypatch.setenv(
+        "SVP_CALLER_SCREEN_URL", "http://svp-api:8100/v1/internal/calls/screen"
+    )
+    monkeypatch.delenv("SVP_BUSY_REPORT_URL", raising=False)
+
+
+def _platform(monkeypatch, answer):
+    """The platform's busy door: `answer` is a dict (200), an int (that status) or an
+    exception (raised); the requests it received are returned."""
+    seen: list[_httpx.Request] = []
+
+    def handler(request: _httpx.Request) -> _httpx.Response:
+        seen.append(request)
+        if isinstance(answer, Exception):
+            raise answer
+        if isinstance(answer, int):
+            return _httpx.Response(answer, json={})
+        return _httpx.Response(200, json=answer)
+
+    real = _httpx.AsyncClient
+    monkeypatch.setattr(
+        svp_plan_limits.httpx,
+        "AsyncClient",
+        lambda **kw: real(transport=_httpx.MockTransport(handler), **kw),
+    )
+    return seen
+
+
+async def _offer(**kw):
+    return await svp_plan_limits.offer_voicemail(
+        organization_id=174,
+        provider=kw.get("provider", "ari"),
+        called_number="+41445550011",
+        carrier_call_id="chan-1",
+    )
+
+
+def test_tel016_the_busy_report_address_follows_the_screening_one(
+    mailbox_on, monkeypatch
+):
+    assert svp_plan_limits.busy_url() == BUSY_URL
+    monkeypatch.setenv("SVP_BUSY_REPORT_URL", "http://elsewhere/busy")
+    assert svp_plan_limits.busy_url() == "http://elsewhere/busy"
+    monkeypatch.delenv("SVP_BUSY_REPORT_URL")
+    monkeypatch.setenv("SVP_CALLER_SCREEN_URL", "http://svp-api:8100/other")
+    assert svp_plan_limits.busy_url() == ""
+
+
+async def test_tel016_the_platform_offers_the_mailbox_in_the_agents_language(
+    mailbox_on, monkeypatch
+):
+    seen = _platform(monkeypatch, {"action": "voicemail", "language": "de"})
+    assert await _offer() == "de"
+    (request,) = seen
+    assert str(request.url) == BUSY_URL
+    assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+    import json
+
+    body = json.loads(request.content)
+    assert body == {
+        "organization_id": 174,
+        "provider": "ari",
+        "called_number": "+41445550011",
+        "carrier_call_id": "chan-1",
+    }  # never the caller's number
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"action": "busy", "language": "fr"},
+        {
+            "action": "voicemail",
+            "language": "xx",
+        },  # a language the edge has no greeting for
+        {"action": "voicemail", "language": None},
+        ["voicemail"],
+        500,
+        401,
+        _httpx.ConnectError("platform down"),
+        _httpx.ReadTimeout("slow"),
+    ],
+)
+async def test_tel016_anything_but_the_offer_keeps_the_busy_tone(
+    mailbox_on, monkeypatch, answer
+):
+    _platform(monkeypatch, answer)
+    assert await _offer() is None
+
+
+async def test_p55_without_the_mailbox_switch_nothing_is_asked(
+    switched_on, monkeypatch
+):
+    monkeypatch.delenv("SVP_BUSY_VOICEMAIL", raising=False)
+    monkeypatch.setenv(
+        "SVP_CALLER_SCREEN_URL", "http://svp-api:8100/v1/internal/calls/screen"
+    )
+    seen = _platform(monkeypatch, {"action": "voicemail", "language": "fr"})
+    assert await _offer() is None and seen == []
+
+
+async def test_p55_the_mailbox_needs_the_plan_limits_switch_too(
+    switched_off, monkeypatch
+):
+    monkeypatch.setenv("SVP_BUSY_VOICEMAIL", "on")
+    seen = _platform(monkeypatch, {"action": "voicemail", "language": "fr"})
+    assert await _offer() is None and seen == []
+
+
+async def test_tel016_ari_a_caller_over_the_limit_is_handed_to_the_edges_mailbox(
+    mailbox_on, monkeypatch
+):
+    from api.services import svp_caller_screen as screen_mod
+    from api.tests.test_svp_caller_screen import EVENT, _ari_connection
+
+    conn, db_double, _concurrency = _ari_connection(monkeypatch)
+    monkeypatch.setattr(screen_mod, "screen", AsyncMock(return_value=False))
+    offered = AsyncMock(return_value="it")
+    monkeypatch.setattr(svp_plan_limits, "offer_voicemail", offered)
+    monkeypatch.setattr(conn, "_svp_busy_mailbox", AsyncMock(return_value=True))
+    await conn._handle_inbound_stasis_start("chan-1", "Ring", EVENT)
+    assert offered.await_args.kwargs == {
+        "organization_id": 174,
+        "provider": "ari",
+        "called_number": "+41445550011",
+        "carrier_call_id": "chan-1",
+    }
+    conn._svp_busy_mailbox.assert_awaited_once_with("chan-1", "it")
+    conn._delete_channel.assert_not_awaited()  # handed back, not hung up
+    db_double.create_workflow_run.assert_not_awaited()
+
+
+@pytest.mark.parametrize("offer, handed", [(None, None), ("fr", False)])
+async def test_tel016_ari_no_offer_or_a_refused_hand_back_is_the_busy_tone(
+    mailbox_on, monkeypatch, offer, handed
+):
+    from api.services import svp_caller_screen as screen_mod
+    from api.tests.test_svp_caller_screen import EVENT, _ari_connection
+
+    conn, _db, _concurrency = _ari_connection(monkeypatch)
+    monkeypatch.setattr(screen_mod, "screen", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        svp_plan_limits, "offer_voicemail", AsyncMock(return_value=offer)
+    )
+    monkeypatch.setattr(conn, "_svp_busy_mailbox", AsyncMock(return_value=handed))
+    await conn._handle_inbound_stasis_start("chan-1", "Ring", EVENT)
+    conn._delete_channel.assert_awaited_once_with("chan-1", reason_code=17)
+
+
+class _Answer:
+    def __init__(self, status):
+        self.status = status
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _Session:
+    """aiohttp's session as the hand-back uses it: the requests made, the statuses given."""
+
+    def __init__(self, statuses, made):
+        self.statuses = list(statuses)
+        self.made = made
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def post(self, url, **kw):
+        self.made.append((url, kw.get("params")))
+        return _Answer(self.statuses.pop(0))
+
+
+@pytest.mark.parametrize(
+    "statuses, ok", [([204, 204], True), ([404, 204], False), ([204, 409], False)]
+)
+async def test_tel016_the_hand_back_sets_the_language_then_continues_to_svp_busy(
+    monkeypatch, statuses, ok
+):
+    from api.services.telephony import ari_manager
+
+    conn = ari_manager.ARIConnection(
+        174, 7, "http://edge-1:8088", "svp", "x", stasis_app_name="dograh_7"
+    )
+    made: list = []
+    monkeypatch.setattr(
+        ari_manager.aiohttp, "ClientSession", lambda *a, **k: _Session(statuses, made)
+    )
+    assert await conn._svp_busy_mailbox("chan-1", "en") is ok
+    assert made[0] == (
+        "http://edge-1:8088/ari/channels/chan-1/variable",
+        {"variable": "SVP_BUSY_LANG", "value": "en"},
+    )
+    if statuses[0] == 204:
+        assert made[1] == (
+            "http://edge-1:8088/ari/channels/chan-1/continue",
+            {"context": "svp-busy", "extension": "s", "priority": "1"},
+        )
+
+
+async def test_tel016_twilio_a_caller_over_the_limit_goes_to_the_platforms_fallback(
+    mailbox_on, monkeypatch
+):
+    from api.tests.test_svp_caller_screen import _run_twilio
+
+    offered = AsyncMock(return_value="fr")
+    monkeypatch.setattr(svp_plan_limits, "offer_voicemail", offered)
+    response, _asked, db_double, _concurrency = await _run_twilio(monkeypatch, False)
+    assert response.status_code == 503  # Twilio then calls the number's fallback URL
+    assert offered.await_args.kwargs["provider"] == "twilio"
+    assert offered.await_args.kwargs["carrier_call_id"] == "CA1"  # the CallSid
+    db_double.create_workflow_run.assert_not_awaited()
+
+
+async def test_tel016_twilio_without_an_offer_keeps_reject_busy(
+    mailbox_on, monkeypatch
+):
+    from api.tests.test_svp_caller_screen import _run_twilio
+
+    monkeypatch.setattr(
+        svp_plan_limits, "offer_voicemail", AsyncMock(return_value=None)
+    )
+    response, _asked, _db, _concurrency = await _run_twilio(monkeypatch, False)
+    assert response.body.endswith(b'<Reject reason="busy"/></Response>')

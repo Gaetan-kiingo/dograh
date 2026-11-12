@@ -647,6 +647,43 @@ class ARIConnection:
         logger.info(f"[ARI org={self.organization_id}] Answered channel {channel_id}")
         return True
 
+    async def _svp_busy_mailbox(self, channel_id: str, language: str) -> bool:
+        """P-55 amended (E2c): hand an unanswered channel back to the edge's dialplan at
+        svp-busy with the mailbox's language; True only when Asterisk took both requests."""
+        url = f"{self.ari_endpoint}/ari/channels/{channel_id}"
+        auth = aiohttp.BasicAuth(self.app_name, self.app_password)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{url}/variable",
+                    auth=auth,
+                    params={"variable": "SVP_BUSY_LANG", "value": language},
+                ) as response:
+                    if response.status not in (200, 204):
+                        raise RuntimeError(f"variable answered {response.status}")
+                async with session.post(
+                    f"{url}/continue",
+                    auth=auth,
+                    params={
+                        "context": svp_plan_limits.MAILBOX_CONTEXT,
+                        "extension": "s",
+                        "priority": "1",
+                    },
+                ) as response:
+                    if response.status not in (200, 204):
+                        raise RuntimeError(f"continue answered {response.status}")
+        except Exception as e:  # noqa: BLE001 - the caller then hears busy
+            logger.warning(
+                f"[ARI org={self.organization_id}] P-55: the mailbox hand-back failed for "
+                f"{channel_id} ({e}) - busy instead"
+            )
+            return False
+        logger.info(
+            f"[ARI org={self.organization_id}] P-55: channel {channel_id} handed to "
+            f"{svp_plan_limits.MAILBOX_CONTEXT} ({language})"
+        )
+        return True
+
     async def _get_channel_var(self, channel_id: str, variable: str) -> str:
         """Read a channel variable/function via ARI. Returns '' if unset."""
         result = await self._ari_request(
@@ -899,7 +936,17 @@ class ARIConnection:
                 )
                 if svp_plan_limits.enabled():
                     # P-55 (ADR-002, E2b): over the plan's simultaneous calls the caller
-                    # hears busy - the unanswered channel hung up with cause 17
+                    # hears busy - the unanswered channel hung up with cause 17; amended
+                    # (E2c): when the platform offers the mailbox, the channel goes back to
+                    # the edge's svp-busy in the agent's language instead
+                    language = await svp_plan_limits.offer_voicemail(
+                        organization_id=self.organization_id,
+                        provider="ari",
+                        called_number=called_number,
+                        carrier_call_id=channel_id,
+                    )
+                    if language and await self._svp_busy_mailbox(channel_id, language):
+                        return
                     await self._delete_channel(
                         channel_id, reason_code=svp_plan_limits.BUSY_CAUSE
                     )

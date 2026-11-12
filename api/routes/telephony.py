@@ -1031,8 +1031,17 @@ async def handle_inbound_run(request: Request):
                 timeout=0,
             )
         except CallConcurrencyLimitError:
-            # P-55 (ADR-002, E2b): over the plan's simultaneous calls Twilio's caller hears busy
+            # P-55 (ADR-002, E2b): over the plan's simultaneous calls Twilio's caller hears
+            # busy; amended (E2c): when the platform offers the mailbox, a 503 sends Twilio
+            # to the number's fallback URL - the platform's busy greeting and record
             if svp_plan_limits.enabled() and provider_class.PROVIDER_NAME == "twilio":
+                if await svp_plan_limits.offer_voicemail(
+                    organization_id=config.organization_id,
+                    provider="twilio",
+                    called_number=normalized_data.to_number,
+                    carrier_call_id=normalized_data.call_id,
+                ):
+                    return svp_plan_limits.twilio_fallback_response()
                 return svp_plan_limits.twilio_busy_response()
             return _validation_error(provider_class, 
                 TelephonyError.CONCURRENT_CALL_LIMIT

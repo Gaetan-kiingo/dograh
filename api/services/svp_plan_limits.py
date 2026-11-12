@@ -20,6 +20,22 @@ simultaneous calls.
    brokers the embed session (F2d) - the runtime's public init is not on the front door.
 
 Unset = stock behaviour: the door answers 404, the stock refusals, every browser call counted.
+
+**Amended 2026-11-12 (E2c, ADR-083 amendment): the caller over the limit leaves a message.**
+With ``SVP_BUSY_VOICEMAIL=on`` too, before refusing the runtime tells the platform
+(``SVP_BUSY_REPORT_URL``, else ``SVP_CALLER_SCREEN_URL`` with ``/calls/screen`` read as
+``/calls/busy``; the same bearer)::
+
+    POST {"organization_id", "provider": "ari" | "twilio", "called_number", "carrier_call_id"}
+    200  {"action": "voicemail" | "busy", "language": "fr" | "de" | "it" | "en" | null}
+
+The platform counts the caller (no caller data) and, on ``voicemail``, the ARI path sets the
+channel's ``SVP_BUSY_LANG`` and hands the unanswered channel back to the edge's dialplan at
+``svp-busy,s,1`` - the busy greeting in that language, the tone, the recording; Twilio's path
+answers 503 and Twilio calls the number's fallback URL, the platform's busy greeting and
+record. **Anything but that answer keeps the busy tone** (an unknown language, no answer within
+``SVP_BUSY_REPORT_TIMEOUT_MS`` - 1500 by default -, an error status, a hand-back the edge
+refused): a caller is never left with nothing. The caller's number is never sent or logged.
 """
 
 from __future__ import annotations
@@ -28,6 +44,7 @@ import hmac
 import os
 from typing import Any
 
+import httpx
 from loguru import logger
 
 from api.db import db_client
@@ -40,6 +57,9 @@ BUSY_TWIML = (
     '<?xml version="1.0" encoding="UTF-8"?><Response><Reject reason="busy"/></Response>'
 )
 UNCOUNTED_SOURCE = "svp-voice-test"
+MAILBOX_CONTEXT = "svp-busy"
+MAILBOX_LANGUAGES = ("fr", "de", "it", "en")
+DEFAULT_REPORT_TIMEOUT_MS = 1500
 
 
 def enabled() -> bool:
@@ -94,3 +114,103 @@ def twilio_busy_response():
     from fastapi.responses import Response
 
     return Response(content=BUSY_TWIML, media_type="application/xml")
+
+
+# --- E2c: the caller over the limit leaves a message (P-55 amended) -----------------------------
+
+
+def voicemail_enabled() -> bool:
+    return enabled() and os.getenv("SVP_BUSY_VOICEMAIL", "").strip().lower() in (
+        "on",
+        "1",
+        "true",
+    )
+
+
+def busy_url() -> str:
+    """Where to report a caller over the limit: ``SVP_BUSY_REPORT_URL``, else the platform's
+    screening address with ``/calls/screen`` read as ``/calls/busy`` (one setting less)."""
+    explicit = os.getenv("SVP_BUSY_REPORT_URL", "").strip()
+    if explicit:
+        return explicit
+    screen = os.getenv("SVP_CALLER_SCREEN_URL", "").strip()
+    if screen.endswith("/calls/screen"):
+        return screen[: -len("screen")] + "busy"
+    return ""
+
+
+def _report_timeout() -> float:
+    raw = os.getenv("SVP_BUSY_REPORT_TIMEOUT_MS", "").strip()
+    try:
+        ms = int(raw) if raw else DEFAULT_REPORT_TIMEOUT_MS
+    except ValueError:
+        ms = DEFAULT_REPORT_TIMEOUT_MS
+    return min(max(ms, 100), 5000) / 1000
+
+
+async def offer_voicemail(
+    *,
+    organization_id: int,
+    provider: str,
+    called_number: Any,
+    carrier_call_id: Any,
+) -> str | None:
+    """The mailbox's language when the platform offers a caller over the limit a message;
+    None means the busy tone (the switch off, no address, no answer, anything else)."""
+    if not voicemail_enabled():
+        return None
+    url = busy_url()
+    token = os.getenv("SVP_KEY_SERVICE_TOKEN", "").strip()
+    if not url or not token:
+        logger.warning(
+            "P-55: no busy report address or no token - the caller hears busy"
+        )
+        return None
+    body = {
+        "organization_id": int(organization_id),
+        "provider": provider,
+        "called_number": str(called_number or "").strip()[:64] or None,
+        "carrier_call_id": str(carrier_call_id or "").strip()[:64] or None,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_report_timeout()) as client:
+            response = await client.post(
+                url, json=body, headers={"Authorization": f"Bearer {token}"}
+            )
+        if response.status_code >= 300:
+            logger.warning(
+                f"P-55: the busy report answered HTTP {response.status_code} for org "
+                f"{organization_id}: the caller hears busy"
+            )
+            return None
+        answer = response.json()
+    except Exception as e:  # noqa: BLE001 - the busy tone, never a dropped caller
+        logger.warning(
+            f"P-55: the busy report was not answered for org {organization_id} "
+            f"({type(e).__name__}): the caller hears busy"
+        )
+        return None
+    if (
+        not isinstance(answer, dict)
+        or answer.get("action") != "voicemail"
+        or answer.get("language") not in MAILBOX_LANGUAGES
+    ):
+        logger.info(
+            f"P-55: org {organization_id}: no mailbox offered - the caller hears busy"
+        )
+        return None
+    logger.info(
+        f"P-55: org {organization_id}: every line in use - mailbox offered "
+        f"({answer['language']}, {provider})"
+    )
+    return str(answer["language"])
+
+
+def twilio_fallback_response():
+    """Twilio's answer when the platform offered the mailbox: a 503, so Twilio calls the
+    number's fallback URL - the platform's busy greeting and record (D5b's path)."""
+    from fastapi.responses import Response
+
+    return Response(
+        status_code=503, content="every line in use", media_type="text/plain"
+    )
