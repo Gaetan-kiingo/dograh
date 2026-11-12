@@ -22,6 +22,7 @@ from api.routes.reports import router as reports_router
 from api.routes.s3_signed_url import router as s3_router
 from api.routes.service_keys import router as service_keys_router
 from api.routes.superuser import router as superuser_router
+from api.routes.svp_plan_limits import router as svp_plan_limits_router
 from api.routes.telephony import router as telephony_router
 from api.routes.tool import router as tool_router
 from api.routes.turn_credentials import router as turn_credentials_router
@@ -64,6 +65,7 @@ router.include_router(folder_router)
 router.include_router(auth_router)
 router.include_router(node_types_router)
 router.include_router(agent_stream_router)
+router.include_router(svp_plan_limits_router)  # P-55 (ADR-002, E2b)
 
 for _integration_router in all_routers():
     router.include_router(_integration_router)

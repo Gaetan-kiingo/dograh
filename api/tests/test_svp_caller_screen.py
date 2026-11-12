@@ -21,6 +21,12 @@ URL = "http://platform.test/v1/internal/calls/screen"
 CALLER = "+41791234567"
 
 
+@pytest.fixture(autouse=True)
+def _plan_limits_off(monkeypatch):
+    """These tests assert the stock concurrency refusal; P-55's busy answer is its own test."""
+    monkeypatch.delenv("SVP_PLAN_LIMITS", raising=False)
+
+
 @pytest.fixture
 def switched_on(monkeypatch):
     monkeypatch.setenv("SVP_CALLER_SCREEN_URL", URL)

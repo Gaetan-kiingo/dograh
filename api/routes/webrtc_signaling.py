@@ -56,6 +56,7 @@ from api.services.pipecat.ws_sender_registry import (
     register_ws_sender,
     unregister_ws_sender,
 )
+from api.services import svp_plan_limits
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.workflow.embed_session_service import validate_embed_origin
 
@@ -943,7 +944,8 @@ async def public_signaling_websocket(
         embed_session.workflow_run_id,
         user,
         embed_token.organization_id,
-        enforce_call_concurrency=True,
+        # P-55 (ADR-002, E2b): the member's own browser test takes no slot of the plan
+        enforce_call_concurrency=svp_plan_limits.takes_slot(workflow_run),
         call_concurrency_source="public_embed",
         # Embed context was already sanitized and persisted during /init.
         # Never let the signaling payload overwrite server-owned run context.

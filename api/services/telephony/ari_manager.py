@@ -48,6 +48,7 @@ from api.services.call_concurrency import (
 )
 from api.services.organization_preferences import external_pbx_integrations_enabled
 from api.services import svp_caller_screen
+from api.services import svp_plan_limits
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.telephony import ws_auth
 from api.services.telephony.factory import resolve_telephony_secret_references_for_org
@@ -896,7 +897,14 @@ class ARIConnection:
                     f"[ARI org={self.organization_id}] Concurrent call limit "
                     f"reached; hanging up inbound channel {channel_id}"
                 )
-                await self._delete_channel(channel_id)
+                if svp_plan_limits.enabled():
+                    # P-55 (ADR-002, E2b): over the plan's simultaneous calls the caller
+                    # hears busy - the unanswered channel hung up with cause 17
+                    await self._delete_channel(
+                        channel_id, reason_code=svp_plan_limits.BUSY_CAUSE
+                    )
+                else:
+                    await self._delete_channel(channel_id)
                 return
 
             # 3. Create workflow run

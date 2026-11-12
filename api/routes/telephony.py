@@ -33,6 +33,7 @@ from api.services.call_concurrency import (
     call_concurrency,
 )
 from api.services import svp_caller_screen
+from api.services import svp_plan_limits
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.telephony import ws_auth
 from api.services.telephony.call_transfer_manager import get_call_transfer_manager
@@ -1030,6 +1031,9 @@ async def handle_inbound_run(request: Request):
                 timeout=0,
             )
         except CallConcurrencyLimitError:
+            # P-55 (ADR-002, E2b): over the plan's simultaneous calls Twilio's caller hears busy
+            if svp_plan_limits.enabled() and provider_class.PROVIDER_NAME == "twilio":
+                return svp_plan_limits.twilio_busy_response()
             return _validation_error(provider_class, 
                 TelephonyError.CONCURRENT_CALL_LIMIT
             )
